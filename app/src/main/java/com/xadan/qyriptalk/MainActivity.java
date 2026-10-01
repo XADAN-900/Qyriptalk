@@ -13,6 +13,7 @@ import android.net.ConnectivityManager;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.MediaStore;
@@ -27,11 +28,16 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
@@ -41,6 +47,12 @@ public class MainActivity extends Activity {
     private static final int PREFERRED_PORT = 38213; // sabit port = sabit origin = localStorage kaybolmaz
     private static final int REQ_FILE_CHOOSER = 1001;
     private static final int REQ_WEB_PERMISSIONS = 2001;
+    private static final int REQ_STARTUP = 2002;
+
+    /** Bildirim butonları (Reddet) için çalışan aktiviteye erişim. */
+    static volatile MainActivity current;
+    /** Uygulama ekranda görünüyor mu? Görünürken native bildirim gösterilmez. */
+    static volatile boolean visible = false;
 
     private WebView webView;
     private LocalServer server;
@@ -53,11 +65,28 @@ public class MainActivity extends Activity {
     private ConnectivityManager.NetworkCallback netCallback;
     private boolean offlinePageShown = false;
 
+    private String bridgeScript;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        webView = new WebView(this);
+        try {
+            webView = new WebView(this);
+        } catch (Throwable t) {
+            // Bazı emülatörlerde WebView sağlayıcısı yok / bozuk olabiliyor
+            TextView tv = new TextView(this);
+            tv.setText("WebView bulunamadı.\n\nCihazda \"Android System WebView\" veya Chrome "
+                    + "yüklü/güncel olmalı.\n\n" + t);
+            tv.setTextColor(Color.WHITE);
+            tv.setBackgroundColor(Color.parseColor("#05001E"));
+            tv.setTextSize(16);
+            tv.setPadding(48, 120, 48, 48);
+            setContentView(tv);
+            return;
+        }
+
+        current = this;
         webView.setBackgroundColor(Color.parseColor("#05001E"));
         setContentView(webView);
 
@@ -65,6 +94,10 @@ public class MainActivity extends Activity {
         WebView.setWebContentsDebuggingEnabled(debuggable);
 
         setupWebView();
+
+        NotificationHelper.createChannels(this);
+        requestStartupPermissions();
+        KeepAliveService.start(this, false);
 
         server = new LocalServer(getAssets());
         new Thread(() -> {
@@ -78,6 +111,27 @@ public class MainActivity extends Activity {
         }, "qyriptalk-server-start").start();
 
         registerNetworkWatcher();
+        handleIntent(getIntent());
+    }
+
+    // ---------- Başlangıç izinleri (bildirim, mikrofon, eski cihazlarda depolama) ----------
+
+    private void requestStartupPermissions() {
+        List<String> need = new ArrayList<>();
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            need.add(Manifest.permission.POST_NOTIFICATIONS);
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            need.add(Manifest.permission.RECORD_AUDIO);
+        }
+        if (Build.VERSION.SDK_INT < 29
+                && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            need.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        }
+        if (!need.isEmpty()) {
+            requestPermissions(need.toArray(new String[0]), REQ_STARTUP);
+        }
     }
 
     // ---------- İnternet kontrolü ----------
@@ -94,7 +148,7 @@ public class MainActivity extends Activity {
 
     /** İnternet varsa uygulamayı, yoksa offline.html hata ekranını yükler. */
     private void loadStart() {
-        if (port < 0) return;
+        if (port < 0 || webView == null) return;
         String base = "http://localhost:" + port + "/";
         if (isOnline()) {
             offlinePageShown = false;
@@ -139,15 +193,23 @@ public class MainActivity extends Activity {
         String js = "(function(){var id='qt-offline-banner';var e=document.getElementById(id);"
                 + (show
                 ? "if(!e){e=document.createElement('div');e.id=id;"
-                + "e.textContent='\u0130nternet ba\u011flant\u0131s\u0131 yok';"
+                + "e.textContent='\\u0130nternet ba\\u011flant\\u0131s\\u0131 yok';"
                 + "e.style.cssText='position:fixed;top:0;left:0;right:0;z-index:2147483647;"
                 + "background:#d32f2f;color:#fff;text-align:center;font:600 14px sans-serif;"
                 + "padding:8px;padding-top:max(8px,env(safe-area-inset-top))';"
                 + "document.body.appendChild(e);}"
                 : "if(e)e.remove();")
                 + "})();";
-        webView.evaluateJavascript(js, null);
+        runJs(js);
     }
+
+    void runJs(final String js) {
+        runOnUiThread(() -> {
+            if (webView != null) webView.evaluateJavascript(js, null);
+        });
+    }
+
+    // ---------- WebView ----------
 
     private void setupWebView() {
         WebSettings s = webView.getSettings();
@@ -157,6 +219,11 @@ public class MainActivity extends Activity {
         s.setAllowFileAccess(false);
         s.setTextZoom(100);
         s.setCacheMode(WebSettings.LOAD_DEFAULT);
+
+        if (Build.VERSION.SDK_INT >= 26) {
+            // Arka plandayken de JS (Firebase dinleyicileri) çalışmaya devam etsin
+            webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
+        }
 
         CookieManager.getInstance().setAcceptCookie(true);
 
@@ -180,6 +247,13 @@ public class MainActivity extends Activity {
                 } catch (ActivityNotFoundException ignored) {
                 }
                 return true;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                if (url != null && url.contains("localhost") && url.contains("index.html")) {
+                    injectBridge(view);
+                }
             }
         });
 
@@ -243,6 +317,48 @@ public class MainActivity extends Activity {
                 }
             }
         });
+    }
+
+    /** android-bridge.js: bildirim + arama köprüsü. Web dosyalarına dokunmadan enjekte edilir. */
+    private void injectBridge(WebView view) {
+        try {
+            if (bridgeScript == null) {
+                try (InputStream in = getAssets().open("android-bridge.js")) {
+                    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                    byte[] buf = new byte[8192];
+                    int n;
+                    while ((n = in.read(buf)) != -1) bos.write(buf, 0, n);
+                    bridgeScript = bos.toString("UTF-8");
+                }
+            }
+            view.evaluateJavascript(bridgeScript, null);
+        } catch (IOException ignored) {
+        }
+    }
+
+    // ---------- Bildirimden gelen aksiyonlar (Cevapla / arama ekranı) ----------
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIntent(intent);
+    }
+
+    private void handleIntent(Intent intent) {
+        if (intent == null || intent.getAction() == null) return;
+        String action = intent.getAction();
+
+        if (intent.getBooleanExtra(NotificationHelper.EXTRA_FROM_CALL, false)
+                && Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(true);
+            setTurnScreenOn(true);
+        }
+
+        if (NotificationHelper.ACTION_ACCEPT.equals(action)) {
+            NotificationHelper.cancelCall(this);
+            runJs("if(typeof acceptIncomingCall==='function'){acceptIncomingCall();}");
+        }
     }
 
     // ---------- Mikrofon / kamera izinleri (sesli arama, sesli mesaj) ----------
@@ -315,12 +431,38 @@ public class MainActivity extends Activity {
         }
     }
 
-    // ---------- Dosya kaydetme köprüsü (blob / data URL -> İndirilenler) ----------
+    // ---------- JS köprüsü: dosya kaydetme, bildirim, arama ----------
 
     public class DownloadBridge {
+
         @JavascriptInterface
         public void retry() {
             runOnUiThread(() -> loadStart());
+        }
+
+        /** Mesaj bildirimi (sadece uygulama ekranda değilken). */
+        @JavascriptInterface
+        public void showNotification(String title, String body, String tag) {
+            if (visible) return;
+            NotificationHelper.showMessage(getApplicationContext(), title, body, tag);
+        }
+
+        /** Gelen arama bildirimi (sadece uygulama ekranda değilken). */
+        @JavascriptInterface
+        public void incomingCall(String callId, String title, String text) {
+            if (visible) return;
+            NotificationHelper.showIncomingCall(getApplicationContext(), callId, title, text);
+        }
+
+        @JavascriptInterface
+        public void cancelCall() {
+            NotificationHelper.cancelCall(getApplicationContext());
+        }
+
+        /** Görüşme başladı/bitti: servis mikrofon tipine yükseltilir / geri alınır. */
+        @JavascriptInterface
+        public void setInCall(boolean inCall) {
+            KeepAliveService.start(getApplicationContext(), inCall);
         }
 
         @JavascriptInterface
@@ -332,16 +474,25 @@ public class MainActivity extends Activity {
                 }
                 byte[] bytes = Base64.decode(dataUrl.substring(comma + 1), Base64.DEFAULT);
 
-                ContentValues values = new ContentValues();
-                values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
-                values.put(MediaStore.MediaColumns.MIME_TYPE, mime);
-                values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
+                if (Build.VERSION.SDK_INT >= 29) {
+                    ContentValues values = new ContentValues();
+                    values.put(MediaStore.MediaColumns.DISPLAY_NAME, fileName);
+                    values.put(MediaStore.MediaColumns.MIME_TYPE, mime);
+                    values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS);
 
-                Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-                if (uri == null) throw new IOException("Dosya oluşturulamadı");
-                try (OutputStream os = getContentResolver().openOutputStream(uri)) {
-                    if (os == null) throw new IOException("Dosya açılamadı");
-                    os.write(bytes);
+                    Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                    if (uri == null) throw new IOException("Dosya oluşturulamadı");
+                    try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+                        if (os == null) throw new IOException("Dosya açılamadı");
+                        os.write(bytes);
+                    }
+                } else {
+                    File dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+                    //noinspection ResultOfMethodCallIgnored
+                    dir.mkdirs();
+                    try (FileOutputStream fos = new FileOutputStream(new File(dir, fileName))) {
+                        fos.write(bytes);
+                    }
                 }
                 toast("İndirilenler'e kaydedildi: " + fileName);
             } catch (Exception e) {
@@ -357,6 +508,28 @@ public class MainActivity extends Activity {
     // ---------- Yaşam döngüsü ----------
 
     @Override
+    protected void onStart() {
+        super.onStart();
+        visible = true;
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        NotificationHelper.clearMessages(this);
+    }
+
+    @Override
+    protected void onStop() {
+        visible = false;
+        if (Build.VERSION.SDK_INT >= 27) {
+            setShowWhenLocked(false);
+            setTurnScreenOn(false);
+        }
+        super.onStop();
+    }
+
+    @Override
     public void onBackPressed() {
         if (webView != null && webView.canGoBack()) {
             webView.goBack();
@@ -367,6 +540,8 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        visible = false;
+        if (current == this) current = null;
         if (connectivityManager != null && netCallback != null) {
             try {
                 connectivityManager.unregisterNetworkCallback(netCallback);
@@ -374,6 +549,9 @@ public class MainActivity extends Activity {
             }
         }
         if (server != null) server.stop();
+        KeepAliveService.stop(this);
+        NotificationHelper.cancelCall(this);
+        NotificationHelper.clearMessages(this);
         if (webView != null) {
             webView.removeJavascriptInterface("QyripAndroid");
             webView.destroy();
