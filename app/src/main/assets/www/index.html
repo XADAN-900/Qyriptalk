@@ -1,0 +1,1029 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Qyriptalk</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- GİRİŞ EKRANI -->
+    <div id="login-screen" class="screen active">
+        <div class="auth-container">
+            <h1 class="app-title">Qyriptalk</h1>
+            <p class="auth-subtitle" data-i18n="Güvenli ve hızlı mesajlaşma platformu">Güvenli ve hızlı mesajlaşma platformu</p>
+            
+            <div class="auth-input-group">
+                <i class="fas fa-user auth-input-icon"></i>
+                <input type="text" id="login-username" class="auth-input" placeholder="Kullanıcı Adı" data-i18n-placeholder="Kullanıcı Adı" autocomplete="off">
+            </div>
+            
+            <div class="auth-input-group">
+                <i class="fas fa-lock auth-input-icon"></i>
+                <input type="password" id="login-password" class="auth-input" placeholder="Şifre" data-i18n-placeholder="Şifre" autocomplete="current-password">
+            </div>
+            
+            <button id="login-button" class="auth-btn">
+                <i class="fas fa-sign-in-alt"></i> <span data-i18n="Giriş Yap">Giriş Yap</span>
+            </button>
+            
+            <p class="auth-switch-text">
+                <span data-i18n="Hesabın yok mu?">Hesabın yok mu?</span>
+                <a class="auth-switch-link" id="show-register-button" data-i18n="Kayıt Ol">Kayıt Ol</a>
+            </p>
+            
+            <p class="auth-footer">
+                <i class="fas fa-shield-alt"></i> <span data-i18n="Güvenli bağlantı | SSL Şifreleme">Güvenli bağlantı | SSL Şifreleme</span>
+            </p>
+        </div>
+    </div>
+
+    <!-- KAYIT EKRANI -->
+    <div id="register-screen" class="screen">
+        <div class="auth-container">
+            <h1 class="app-title">Qyriptalk</h1>
+            <p class="auth-subtitle" data-i18n="Yeni hesap oluştur">Yeni hesap oluştur</p>
+            
+            <div class="auth-input-group">
+                <i class="fas fa-user auth-input-icon"></i>
+                <input type="text" id="register-username" class="auth-input" placeholder="Kullanıcı Adı (min. 3 karakter)" data-i18n-placeholder="Kullanıcı Adı (min. 3 karakter)" autocomplete="off">
+            </div>
+            
+            <div class="auth-input-group">
+                <i class="fas fa-lock auth-input-icon"></i>
+                <input type="password" id="register-password" class="auth-input" placeholder="Şifre (min. 6 karakter)" data-i18n-placeholder="Şifre (min. 6 karakter)" autocomplete="new-password">
+            </div>
+            
+            <button id="register-button" class="auth-btn">
+                <i class="fas fa-user-plus"></i> <span data-i18n="Kayıt Ol">Kayıt Ol</span>
+            </button>
+            
+            <p class="auth-switch-text">
+                <span data-i18n="Zaten hesabın var mı?">Zaten hesabın var mı?</span>
+                <a class="auth-switch-link" id="show-login-button" data-i18n="Giriş Yap">Giriş Yap</a>
+            </p>
+            
+            <p class="auth-footer">
+                <i class="fas fa-check-circle"></i> <span data-i18n="Ücretsiz | Sınırsız mesaj">Ücretsiz | Sınırsız mesaj</span>
+            </p>
+        </div>
+    </div>
+
+    <!-- WHATSAPP ARAYÜZÜ -->
+    <div id="app-screen" class="screen">
+        <div class="whatsapp-container">
+            <!-- SOL SIDEBAR -->
+            <div class="sidebar active">
+                <div class="sidebar-header">
+                    <div class="user-avatar" id="sidebar-avatar" title="Profil Ayarları" data-i18n-title="Profil Ayarları">
+                        Q
+                        <div class="user-role-badge" id="user-role-badge"></div>
+                    </div>
+                    <div class="sidebar-actions">
+                        <button class="icon-btn" id="notifications-bell-btn" title="Bildirimler" data-i18n-title="Bildirimler">
+                            <i class="fas fa-bell"></i>
+                            <div class="notification-badge" id="global-notification-badge" style="display: none;">0</div>
+                        </button>
+                        <button class="icon-btn" id="app-settings-btn" title="Uygulama Ayarları" data-i18n-title="Uygulama Ayarları">
+                            <i class="fas fa-cog"></i>
+                        </button>
+                        <button class="icon-btn" id="theme-toggle-btn" title="Tema Değiştir" data-i18n-title="Tema Değiştir">
+                            <i class="fas fa-moon"></i>
+                        </button>
+                        <button class="icon-btn" id="sidebar-logout-btn" title="Çıkış Yap" data-i18n-title="Çıkış Yap">
+                            <i class="fas fa-sign-out-alt"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="search-container">
+                    <div class="search-box">
+                        <i class="fas fa-search search-icon"></i>
+                        <input type="text" class="search-input" placeholder="Odaları ara, kullanıcı bul veya davet URL'si yapıştır..." data-i18n-placeholder="Odaları ara, kullanıcı bul veya davet URL'si yapıştır..." id="search-input">
+                    </div>
+                    <div class="search-results" id="search-results">
+                        <!-- Dinamik olarak eklenecek -->
+                    </div>
+                </div>
+
+                <div class="rooms-list" id="sidebar-rooms-list">
+                    <!-- Dinamik olarak eklenecek -->
+                </div>
+
+                <button id="new-room-btn" class="new-room-btn">
+                    <i class="fas fa-plus"></i> <span data-i18n="Yeni Oda Oluştur">Yeni Oda Oluştur</span>
+                </button>
+            </div>
+
+            <!-- CHAT ALANI -->
+            <div class="chat-area" id="chat-area">
+                <!-- Boş Chat Ekranı -->
+                <div class="empty-chat" id="empty-chat">
+                    <div class="empty-chat-icon">
+                        <i class="fas fa-comments"></i>
+                    </div>
+                    <h2 data-i18n="Hoş Geldiniz!">Hoş Geldiniz!</h2>
+                    <p data-i18n="Bir sohbet odası seçerek mesajlaşmaya başlayabilirsiniz. Sol taraftan mevcut odaları görebilir ve yeni bir oda oluşturabilirsiniz.">Bir sohbet odası seçerek mesajlaşmaya başlayabilirsiniz. Sol taraftan mevcut odaları görebilir ve yeni bir oda oluşturabilirsiniz.</p>
+                    <p data-i18n="Özel mesajlaşmak için üstteki arama kutusundan kullanıcı arayabilirsiniz.">Özel mesajlaşmak için üstteki arama kutusundan kullanıcı arayabilirsiniz.</p>
+                    <p style="margin-top: 20px; color: var(--primary-color);">
+                        <i class="fas fa-link"></i> <span data-i18n="Davet URL'sini arama kutusuna yapıştırarak odaya katılabilirsiniz.">Davet URL'sini arama kutusuna yapıştırarak odaya katılabilirsiniz.</span>
+                    </p>
+                </div>
+
+                <!-- Aktif Chat Ekranı -->
+                <div class="chat-header hidden" id="chat-header">
+                    <div style="display: flex; align-items: center;">
+                        <button class="icon-btn back-btn" id="back-to-menu-btn" title="Ana Menüye Dön" data-i18n-title="Ana Menüye Dön">
+                            <i class="fas fa-arrow-left"></i>
+                        </button>
+                        <div class="chat-info">
+                            <div class="user-avatar" id="chat-avatar" title="Kullanıcı Bilgileri" data-i18n-title="Kullanıcı Bilgileri">
+                                G
+                            </div>
+                            <div>
+                                <div class="chat-title" id="room-title" data-i18n="Sohbet Odası">Sohbet Odası</div>
+                                <div class="chat-status">
+                                    <button class="online-count-btn" id="online-count-btn">
+                                        <span id="online-count">0 çevrimiçi</span>
+                                    </button>
+                                    <span id="dm-indicator" class="hidden"> • <span data-i18n="Özel Mesaj">Özel Mesaj</span></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="sidebar-actions">
+                        <button class="icon-btn call-header-btn" id="call-btn" title="Ara" data-i18n-title="Ara">
+                            <i class="fas fa-phone"></i>
+                        </button>
+                        <button class="icon-btn" id="menu-btn" title="Menü" data-i18n-title="Menü">
+                            <i class="fas fa-ellipsis-v"></i>
+                            <div class="notification-badge" id="notification-badge" style="display: none;">0</div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- ÇOKLU SEÇİM ARAÇ ÇUBUĞU -->
+                <div class="selection-toolbar hidden" id="selection-toolbar">
+                    <button class="icon-btn" id="selection-cancel-btn" title="İptal" data-i18n-title="İptal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                    <div class="selection-count-label">
+                        <span id="selection-count">0</span> <span data-i18n="seçildi">seçildi</span>
+                    </div>
+                    <div class="selection-toolbar-actions">
+                        <button class="icon-btn" id="selection-forward-btn" title="İlet" data-i18n-title="İlet">
+                            <i class="fas fa-share"></i>
+                        </button>
+                        <button class="icon-btn" id="selection-delete-btn" title="Sil" data-i18n-title="Sil">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- SABİTLENMİŞ MESAJ ÇUBUĞU -->
+                <div class="pinned-message-banner hidden" id="pinned-message-banner">
+                    <div class="pinned-message-icon"><i class="fas fa-thumbtack"></i></div>
+                    <div class="pinned-message-body" id="pinned-message-goto">
+                        <div class="pinned-message-sender" id="pinned-message-sender"></div>
+                        <div class="pinned-message-text" id="pinned-message-text"></div>
+                    </div>
+                    <button class="pinned-message-unpin" id="pinned-message-unpin-btn" title="Sabitlemeyi Kaldır" data-i18n-title="Sabitlemeyi Kaldır">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+
+                <div class="messages-container hidden" id="messages-container">
+                    <!-- Mesajlar buraya eklenecek -->
+                </div>
+
+                <div class="typing-indicator hidden" id="typing-indicator"></div>
+
+                <div class="message-input-container hidden" id="message-input-container">
+                    <!-- EMOJI PICKER -->
+                    <div class="emoji-picker" id="emoji-picker">
+                        <div class="emoji-category">
+                            <div class="emoji-category-title" data-i18n="Sık Kullanılan">Sık Kullanılan</div>
+                            <div class="emoji-grid" id="frequent-emojis">
+                                <!-- Sık kullanılan emojiler -->
+                            </div>
+                        </div>
+                        <div class="emoji-category">
+                            <div class="emoji-category-title" data-i18n="Yüzler">Yüzler</div>
+                            <div class="emoji-grid" id="face-emojis">
+                                <!-- Yüz emojileri -->
+                            </div>
+                        </div>
+                        <div class="emoji-category">
+                            <div class="emoji-category-title" data-i18n="Nesneler">Nesneler</div>
+                            <div class="emoji-grid" id="object-emojis">
+                                <!-- Nesne emojileri -->
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- YANIT ÖNİZLEME ÇUBUĞU -->
+                    <div class="reply-preview-bar hidden" id="reply-preview-bar">
+                        <div class="reply-preview-accent"></div>
+                        <div class="reply-preview-icon" id="reply-preview-icon"><i class="fas fa-reply"></i></div>
+                        <div class="reply-preview-body">
+                            <div class="reply-preview-sender" id="reply-preview-sender"></div>
+                            <div class="reply-preview-text" id="reply-preview-text"></div>
+                        </div>
+                        <button class="reply-preview-cancel" id="reply-preview-cancel" title="Vazgeç" data-i18n-title="Vazgeç">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+
+                    <div class="input-area">
+                        <button class="input-action-btn" id="emoji-input-btn" title="Emoji Ekle" data-i18n-title="Emoji Ekle">
+                            <i class="fas fa-smile"></i>
+                        </button>
+                        
+                        <button class="input-action-btn" id="file-input-btn" title="Dosya Ekle" data-i18n-title="Dosya Ekle">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M21.44 11.05l-9.19 9.19a5.5 5.5 0 0 1-7.78-7.78l9.19-9.19a3.5 3.5 0 0 1 4.95 4.95l-9.2 9.19a1.5 1.5 0 0 1-2.12-2.12l8.49-8.49" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                        
+                        <textarea 
+                            class="message-input" 
+                            id="message-input" 
+                            placeholder="Mesajınızı yazın..." data-i18n-placeholder="Mesajınızı yazın..."
+                            rows="1"
+                        ></textarea>
+                        
+                        <!-- SES KAYIT BUTONU -->
+                        <button class="input-action-btn" id="voice-record-btn" title="Sesli Mesaj" data-i18n-title="Sesli Mesaj">
+                            <i class="fas fa-microphone"></i>
+                        </button>
+                        
+                        <!-- GÖNDER BUTONU -->
+                        <button class="send-btn" id="send-button" title="Gönder" data-i18n-title="Gönder">
+                            <i class="fas fa-paper-plane"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- DOSYA YÜKLEME GÖSTERGESİ -->
+    <div class="upload-progress" id="upload-progress">
+        <div class="upload-info">
+            <div class="upload-file-name" id="upload-file-name"></div>
+            <div class="upload-percentage" id="upload-percentage">%0</div>
+        </div>
+        <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+        </div>
+    </div>
+
+    <!-- ODA ÖNİZLEME KARTI -->
+    <div id="room-preview-card" class="room-preview-card hidden">
+        <div class="room-preview-header">
+            <div class="room-preview-avatar" id="room-preview-avatar">O</div>
+            <div class="room-preview-info">
+                <h4 id="room-preview-name">Oda Adı</h4>
+                <p id="room-preview-type">Herkese Açık Oda</p>
+            </div>
+        </div>
+        
+        <div class="room-preview-details">
+            <div class="room-preview-detail">
+                <span class="room-preview-detail-label" data-i18n="Kurucu:">Kurucu:</span>
+                <span class="room-preview-detail-value" id="room-preview-creator">-</span>
+            </div>
+            <div class="room-preview-detail">
+                <span class="room-preview-detail-label" data-i18n="Üye Sayısı:">Üye Sayısı:</span>
+                <span class="room-preview-detail-value" id="room-preview-members">0</span>
+            </div>
+            <div class="room-preview-detail">
+                <span class="room-preview-detail-label" data-i18n="Mesaj Sayısı:">Mesaj Sayısı:</span>
+                <span class="room-preview-detail-value" id="room-preview-messages">0</span>
+            </div>
+            <div class="room-preview-detail">
+                <span class="room-preview-detail-label" data-i18n="Durum:">Durum:</span>
+                <span class="room-preview-detail-value" id="room-preview-status">-</span>
+            </div>
+        </div>
+        
+        <div class="modal-buttons">
+            <button id="room-preview-join-btn" class="auth-btn" data-i18n="Odaya Katıl">Odaya Katıl</button>
+            <button id="room-preview-cancel-btn" class="auth-btn secondary" data-i18n="Kapat">Kapat</button>
+        </div>
+    </div>
+
+    <!-- MODALLAR -->
+    <!-- Yeni Oda Modal -->
+    <div id="new-room-modal" class="modal">
+        <div class="modal-content">
+            <h3 data-i18n="Yeni Oda Oluştur">Yeni Oda Oluştur</h3>
+
+            <!-- ODA LOGOSU SEÇİMİ (isteğe bağlı) -->
+            <div class="new-room-logo-picker">
+                <div class="new-room-logo-avatar">
+                    <div class="new-room-logo-preview" id="new-room-logo-preview">
+                        <i class="fas fa-camera"></i>
+                    </div>
+                    <div class="new-room-logo-badge">
+                        <i class="fas fa-plus"></i>
+                    </div>
+                </div>
+                <button type="button" class="new-room-logo-label" id="new-room-logo-btn" data-i18n="Oda Logosu Ekle">Oda Logosu Ekle</button>
+                <input type="file" id="new-room-logo-input" accept="image/*" style="display: none;">
+            </div>
+
+            <div class="auth-input-group">
+                <svg class="auth-input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <input type="text" id="new-room-name-input" class="auth-input" placeholder="Oda Adı" data-i18n-placeholder="Oda Adı" autocomplete="off">
+            </div>
+            
+            <!-- ODA TİPİ SEÇİMİ -->
+            <div class="room-type-selector">
+                <div class="room-type-btn active" data-room-type="public" id="public-room-btn">
+                    <i class="fas fa-globe"></i>
+                    <div class="room-type-title" data-i18n="Herkese Açık">Herkese Açık</div>
+                    <div class="room-type-desc" data-i18n="Herkes görebilir ve katılabilir">Herkes görebilir ve katılabilir</div>
+                </div>
+                <div class="room-type-btn" data-room-type="private" id="private-room-btn">
+                    <i class="fas fa-lock"></i>
+                    <div class="room-type-title" data-i18n="Özel/Gizli">Özel/Gizli</div>
+                    <div class="room-type-desc" data-i18n="Sadece linki bilenler katılabilir">Sadece linki bilenler katılabilir</div>
+                </div>
+            </div>
+            
+            <div class="auth-input-group">
+                <svg class="auth-input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="5" y="11" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.8"/>
+                    <path d="M8 11V7a4 4 0 0 1 8 0v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+                <input type="password" id="new-room-password-input" class="auth-input" placeholder="Şifre (isteğe bağlı)" data-i18n-placeholder="Şifre (isteğe bağlı)" autocomplete="off">
+            </div>
+            <div class="modal-buttons">
+                <button id="cancel-room-btn" class="auth-btn secondary" data-i18n="İptal">İptal</button>
+                <button id="create-room-btn" class="auth-btn" data-i18n="Oluştur">Oluştur</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Odaya Katıl Modal -->
+    <div id="join-room-modal" class="modal">
+        <div class="modal-content">
+            <h3 data-i18n="Odaya Katıl">Odaya Katıl</h3>
+            <p id="join-room-name-text" style="margin-bottom: 15px; color: var(--text-color);"></p>
+            <input type="password" id="join-room-password-input" class="auth-input" placeholder="Oda Şifresi" data-i18n-placeholder="Oda Şifresi" autocomplete="off">
+            <div class="modal-buttons">
+                <button id="cancel-join-btn" class="auth-btn secondary" data-i18n="İptal">İptal</button>
+                <button id="confirm-join-btn" class="auth-btn" data-i18n="Katıl">Katıl</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PROFİL AYARLARI MODALI -->
+    <div id="profile-modal" class="modal">
+        <div class="modal-content">
+            <div class="profile-settings">
+                <h3 data-i18n="Profil Ayarları">Profil Ayarları</h3>
+                
+                <div class="profile-header">
+                    <div class="profile-avatar-large" id="profile-avatar-large">
+                        <div class="change-photo-text" data-i18n="Fotoğraf Değiştir">Fotoğraf Değiştir</div>
+                    </div>
+                    <div class="profile-info">
+                        <h4 id="profile-username">Kullanıcı</h4>
+                        <p id="profile-status">🟢 Çevrimiçi</p>
+                        <input type="file" id="profile-photo-input" accept="image/*" style="display: none;">
+                        <div class="photo-upload-btn" id="upload-photo-btn">
+                            <i class="fas fa-camera"></i> <span data-i18n="Fotoğraf Yükle">Fotoğraf Yükle</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h5 data-i18n="Kişisel Bilgiler">Kişisel Bilgiler</h5>
+                    
+                    <div class="setting-item">
+                        <label class="setting-label" for="profile-username-input" data-i18n="Kullanıcı Adı">Kullanıcı Adı</label>
+                        <input type="text" id="profile-username-input" class="auth-input" placeholder="Yeni kullanıcı adı" data-i18n-placeholder="Yeni kullanıcı adı" autocomplete="off">
+                    </div>
+                    
+                    <div class="setting-item">
+                        <label class="setting-label" for="profile-bio-input" data-i18n="Açıklama (Bio)">Açıklama (Bio)</label>
+                        <textarea id="profile-bio-input" class="auth-input" placeholder="Kendinizi tanıtın..." data-i18n-placeholder="Kendinizi tanıtın..." rows="3" style="resize: vertical;"></textarea>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h5 data-i18n="Şifre Değiştir">Şifre Değiştir</h5>
+                    
+                    <div class="setting-item">
+                        <label class="setting-label" for="profile-current-password" data-i18n="Mevcut Şifre">Mevcut Şifre</label>
+                        <input type="password" id="profile-current-password" class="auth-input" placeholder="Mevcut Şifreniz" data-i18n-placeholder="Mevcut Şifreniz" autocomplete="current-password">
+                    </div>
+                    
+                    <div class="setting-item">
+                        <label class="setting-label" for="profile-new-password" data-i18n="Yeni Şifre">Yeni Şifre</label>
+                        <input type="password" id="profile-new-password" class="auth-input" placeholder="Yeni Şifre" data-i18n-placeholder="Yeni Şifre" autocomplete="new-password">
+                    </div>
+                    
+                    <div class="setting-item">
+                        <label class="setting-label" for="profile-confirm-password" data-i18n="Yeni Şifre Tekrar">Yeni Şifre Tekrar</label>
+                        <input type="password" id="profile-confirm-password" class="auth-input" placeholder="Yeni Şifre tekrar" data-i18n-placeholder="Yeni Şifre tekrar" autocomplete="new-password">
+                    </div>
+                </div>
+
+                <div class="modal-buttons">
+                    <button id="cancel-profile-btn" class="auth-btn secondary" data-i18n="İptal">İptal</button>
+                    <button id="save-profile-btn" class="auth-btn" data-i18n="Kaydet">Kaydet</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ODA BİLGİLERİ MODALI -->
+    <div id="room-info-modal" class="modal">
+        <div class="modal-content">
+            <div class="room-info-modal">
+                <h3 data-i18n="Oda Bilgileri">Oda Bilgileri</h3>
+                
+                <div class="room-info-details">
+                    <div class="room-info-item">
+                        <div class="room-info-label" data-i18n="Oda Adı">Oda Adı</div>
+                        <div class="room-info-value" id="room-info-name">-</div>
+                    </div>
+                    
+                    <div class="room-info-item">
+                        <div class="room-info-label" data-i18n="Kurucu:">Kurucu</div>
+                        <div class="room-info-value" id="room-info-creator">-</div>
+                    </div>
+                    
+                    <div class="room-info-item">
+                        <div class="room-info-label" data-i18n="Kuruluş Tarihi">Kuruluş Tarihi</div>
+                        <div class="room-info-value" id="room-info-created">-</div>
+                    </div>
+                    
+                    <div class="room-info-item">
+                        <div class="room-info-label" data-i18n="Oda Tipi">Oda Tipi</div>
+                        <div class="room-info-value" id="room-info-type">-</div>
+                    </div>
+                    
+                    <div class="room-info-item">
+                        <div class="room-info-label" data-i18n="Şifre Durumu">Şifre Durumu</div>
+                        <div class="room-info-value" id="room-info-password">-</div>
+                    </div>
+                    
+                    <div class="room-info-item">
+                        <div class="room-info-label" data-i18n="Çevrimiçi Üyeler">Çevrimiçi Üyeler</div>
+                        <div class="room-info-value" id="room-info-online">
+                            <strong>1 çevrimiçi</strong> / 4 üye
+                            <br>
+                            <span style="font-size: 12px; opacity: 0.7;">3 çevrimdışı</span>
+                        </div>
+                    </div>
+                    
+                    <div class="room-info-item">
+                        <div class="room-info-label" data-i18n="Toplam Mesaj">Toplam Mesaj</div>
+                        <div class="room-info-value" id="room-info-messages">-</div>
+                    </div>
+                    
+                    <!-- ÖZEL ODA İÇİN DAVET LİNKİ -->
+                    <div class="room-info-item" id="room-invite-link-item" style="display: none;">
+                        <div class="room-info-label" data-i18n="Davet Linki">Davet Linki</div>
+                        <div class="room-info-value">
+                            <div style="display: flex; gap: 10px; align-items: center;">
+                                <input type="text" id="room-invite-link-input" readonly 
+                                       style="flex: 1; padding: 5px; background: var(--input-bg-color); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-color);">
+                                <button id="copy-invite-link-btn" class="icon-btn" style="background: var(--primary-color); color: white; padding: 8px; border-radius: 4px;">
+                                    <i class="fas fa-copy"></i>
+                                </button>
+                            </div>
+                            <p style="font-size: 11px; opacity: 0.7; margin-top: 5px;" data-i18n="Bu linki paylaşarak diğer kullanıcıları odaya davet edebilirsiniz.">Bu linki paylaşarak diğer kullanıcıları odaya davet edebilirsiniz.</p>
+                        </div>
+                    </div>
+                    
+                    <!-- QR KOD BÖLÜMÜ -->
+                    <div class="room-info-item" id="room-qr-code-item" style="display: none;">
+                        <div class="room-info-label" data-i18n="QR Kod">QR Kod</div>
+                        <div class="room-info-value">
+                            <div class="qr-code-container">
+                                <div id="qr-code"></div>
+                                <p class="qr-instruction" data-i18n="QR kodu tarayarak odaya katılabilirsiniz">QR kodu tarayarak odaya katılabilirsiniz</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="modal-buttons">
+                    <button id="close-room-info-btn" class="auth-btn" data-i18n="Kapat">Kapat</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MESAJLARI İLET MODALI -->
+    <div id="forward-message-modal" class="modal">
+        <div class="modal-content">
+            <div class="room-info-modal">
+                <h3 data-i18n="Mesajları İlet">Mesajları İlet</h3>
+                <p style="font-size: 13px; opacity: 0.75; margin-bottom: 10px;" data-i18n="İletilecek oda veya kişiyi seçin:">İletilecek oda veya kişiyi seçin:</p>
+                <div class="forward-room-list" id="forward-room-list">
+                    <!-- JS ile doldurulacak -->
+                </div>
+                <div class="modal-buttons">
+                    <button id="close-forward-modal-btn" class="auth-btn" data-i18n="İptal">İptal</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- KİŞİ BİLGİLERİ MODALI -->
+    <div id="user-info-modal" class="modal">
+        <div class="modal-content">
+            <div class="room-info-modal">
+                <h3 data-i18n="Kişi Bilgileri">Kişi Bilgileri</h3>
+                
+                <div class="profile-header" style="border-bottom: none;">
+                    <div class="profile-avatar-large" id="user-info-avatar">
+                        K
+                    </div>
+                    <div class="profile-info">
+                        <h4 id="user-info-name">Kullanıcı</h4>
+                        <p id="user-info-status">🟢 Çevrimiçi</p>
+                    </div>
+                </div>
+                
+                <div class="room-info-details" style="margin-top: 20px;">
+                    <div class="room-info-item">
+                        <div class="room-info-label" data-i18n="Katılma Tarihi">Katılma Tarihi</div>
+                        <div class="room-info-value" id="user-info-joined">-</div>
+                    </div>
+                    
+                    <div class="room-info-item">
+                        <div class="room-info-label" data-i18n="Açıklama (Bio)">Açıklama (Bio)</div>
+                        <div class="room-info-value" id="user-info-bio">Açıklama bulunmuyor</div>
+                    </div>
+                    
+                    <div class="room-info-item">
+                        <div class="room-info-label" data-i18n="Son Görülme">Son Görülme</div>
+                        <div class="room-info-value" id="user-info-last-seen">-</div>
+                    </div>
+                    
+                    <div class="room-info-item">
+                        <div class="room-info-label" data-i18n="Rol">Rol</div>
+                        <div class="room-info-value" id="user-info-role">Kullanıcı</div>
+                    </div>
+                </div>
+
+                <div class="modal-buttons">
+                    <button id="close-user-info-btn" class="auth-btn" data-i18n="Kapat">Kapat</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ÇEVRİMİÇİ KULLANICILAR MODALI -->
+    <div id="online-users-modal" class="modal">
+        <div class="modal-content">
+            <div class="online-users-modal">
+                <h3 data-i18n="Çevrimiçi Kullanıcılar">Çevrimiçi Kullanıcılar</h3>
+                
+                <div class="online-users-list" id="online-users-list">
+                    <!-- Çevrimiçi kullanıcılar buraya eklenecek -->
+                </div>
+
+                <div class="modal-buttons">
+                    <button id="close-online-users-btn" class="auth-btn" data-i18n="Kapat">Kapat</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- UYGULAMA AYARLARI MODALI -->
+    <div id="app-settings-modal" class="modal">
+        <div class="modal-content">
+            <div class="app-settings">
+                <h3 data-i18n="Uygulama Ayarları">Uygulama Ayarları</h3>
+                
+                <div class="settings-section">
+                    <h5 data-i18n="Dil / Language">Dil / Language</h5>
+
+                    <div class="lang-switch" id="lang-switch">
+                        <button type="button" class="lang-option" id="lang-tr-btn" data-lang="tr">
+                            <span class="lang-flag">🇹🇷</span> Türkçe
+                        </button>
+                        <button type="button" class="lang-option" id="lang-en-btn" data-lang="en">
+                            <span class="lang-flag">🇬🇧</span> English
+                        </button>
+                    </div>
+
+                    <h5 data-i18n="Görünüm">Görünüm</h5>
+                    
+                    <div class="settings-option">
+                        <label for="auto-theme-switch" data-i18n="Otomatik Tema">Otomatik Tema</label>
+                        <label class="switch">
+                            <input type="checkbox" id="auto-theme-switch">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    
+                    <div class="settings-option">
+                        <label for="compact-mode" data-i18n="Kompakt Mod">Kompakt Mod</label>
+                        <label class="switch">
+                            <input type="checkbox" id="compact-mode">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h5 data-i18n="Sohbet Ayarları">Sohbet Ayarları</h5>
+                    
+                    <div class="settings-option">
+                        <label for="enter-to-send" data-i18n="Enter ile Gönder">Enter ile Gönder</label>
+                        <label class="switch">
+                            <input type="checkbox" id="enter-to-send" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    
+                    <div class="settings-option">
+                        <label for="show-read-receipts" data-i18n="Okundu Bilgisi">Okundu Bilgisi</label>
+                        <label class="switch">
+                            <input type="checkbox" id="show-read-receipts" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    
+                    <div class="settings-option">
+                        <label for="auto-translate" data-i18n="Otomatik Çeviri">Otomatik Çeviri</label>
+                        <label class="switch">
+                            <input type="checkbox" id="auto-translate">
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h5 data-i18n="Bildirimler">Bildirimler</h5>
+                    
+                    <div class="settings-option">
+                        <label for="message-notifications" data-i18n="Mesaj Bildirimleri">Mesaj Bildirimleri</label>
+                        <label class="switch">
+                            <input type="checkbox" id="message-notifications" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                    
+                    <div class="settings-option">
+                        <label for="sound-notifications" data-i18n="Ses Bildirimleri">Ses Bildirimleri</label>
+                        <label class="switch">
+                            <input type="checkbox" id="sound-notifications" checked>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="modal-buttons">
+                    <button id="cancel-app-settings-btn" class="auth-btn secondary" data-i18n="İptal">İptal</button>
+                    <button id="save-app-settings-btn" class="auth-btn" data-i18n="Kaydet">Kaydet</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ARKADAŞ DAVET ET MODALI -->
+    <div id="invite-friend-modal" class="modal">
+        <div class="modal-content">
+            <div class="invite-friend-container">
+                <h3 data-i18n="Arkadaş Davet Et">Arkadaş Davet Et</h3>
+                <p style="margin-bottom: 20px; color: var(--text-color); opacity: 0.8;">
+                    <span data-i18n="Bu odanın davet linkini arkadaşlarınızla paylaşarak onları sohbete davet edebilirsiniz.">Bu odanın davet linkini arkadaşlarınızla paylaşarak onları sohbete davet edebilirsiniz.</span>
+                </p>
+                
+                <div class="invite-url-box">
+                    <div class="invite-url-title" data-i18n="Davet Linki:">Davet Linki:</div>
+                    <input type="text" id="invite-url-input" class="invite-url-input" readonly>
+                    
+                    <div class="invite-instruction">
+                        <i class="fas fa-info-circle"></i> <span data-i18n="Bu linki kopyalayıp arkadaşlarınızla paylaşın.">Bu linki kopyalayıp arkadaşlarınızla paylaşın.</span>
+                        <br>
+                        Format: Qyriptalk/OdaAdı/OdaID
+                    </div>
+                </div>
+                
+                <!-- SADECE LINKİ KOPYALA BUTONU -->
+                <div class="invite-buttons">
+                    <button id="copy-invite-url-btn" class="auth-btn">
+                        <i class="fas fa-copy"></i> <span data-i18n="Linki Kopyala">Linki Kopyala</span>
+                    </button>
+                </div>
+                
+                <div class="modal-buttons" style="margin-top: 20px;">
+                    <button id="close-invite-modal-btn" class="auth-btn secondary" data-i18n="Kapat">Kapat</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- SES KAYIT MODALI - GELİŞMİŞ -->
+    <div id="voice-record-modal" class="modal">
+        <div class="modal-content" style="max-width: 450px;">
+            <h3 data-i18n="Sesli Mesaj Kaydı">Sesli Mesaj Kaydı</h3>
+            
+            <div id="voice-record-visualizer" class="voice-record-visualizer">
+                <div id="voice-record-animation" style="font-size: 50px; color: var(--primary-color);">
+                    <i class="fas fa-microphone"></i>
+                </div>
+                <div id="voice-record-time" style="position: absolute; font-size: 28px; font-weight: bold; color: var(--text-color); bottom: 10px;">00:00</div>
+            </div>
+            
+            <div id="voice-record-status" style="text-align: center; margin: 10px 0; color: var(--text-color);">
+                <span data-i18n="Kayıt başlatmak için mikrofon butonuna basılı tutun">Kayıt başlatmak için mikrofon butonuna basılı tutun</span>
+            </div>
+            
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                <button id="voice-record-start-btn" class="auth-btn" style="flex: 1;">
+                    <i class="fas fa-microphone"></i> <span data-i18n="Kaydı Başlat">Kaydı Başlat</span>
+                </button>
+                <button id="voice-record-stop-btn" class="auth-btn secondary" style="flex: 1;" disabled>
+                    <i class="fas fa-stop"></i> <span data-i18n="Durdur">Durdur</span>
+                </button>
+            </div>
+            
+            <div id="voice-record-preview" style="margin-top: 20px; display: none;">
+                <audio id="voice-record-audio" controls style="width: 100%; margin-bottom: 10px;"></audio>
+                <div style="display: flex; gap: 10px;">
+                    <button id="voice-record-replay-btn" class="auth-btn secondary" style="flex: 1;">
+                        <i class="fas fa-redo"></i> <span data-i18n="Tekrar Kayıt">Tekrar Kayıt</span>
+                    </button>
+                </div>
+            </div>
+            
+            <div class="modal-buttons" style="margin-top: 20px;">
+                <button id="voice-record-cancel-btn" class="auth-btn secondary" data-i18n="İptal">İptal</button>
+                <button id="voice-record-send-btn" class="auth-btn" disabled data-i18n="Gönder">Gönder</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GÖRSEL ÖNİZLEME MODALI -->
+    <div id="image-preview-modal" class="modal">
+        <div class="modal-content" style="max-width: 600px;">
+            <h3 data-i18n="Görsel Önizleme">Görsel Önizleme</h3>
+            <div id="image-preview-container" style="margin: 20px 0; text-align: center;">
+                <img id="image-preview-img" src="" alt="Önizleme" data-i18n-alt="Önizleme" style="max-width: 100%; max-height: 400px; border-radius: 8px;">
+            </div>
+            <textarea id="image-caption-input" class="auth-input" placeholder="Görsel için açıklama ekleyin (isteğe bağlı)" data-i18n-placeholder="Görsel için açıklama ekleyin (isteğe bağlı)" rows="3" style="margin-top: 10px; resize: vertical;"></textarea>
+            <div class="modal-buttons" style="margin-top: 20px;">
+                <button id="image-preview-cancel-btn" class="auth-btn secondary" data-i18n="İptal">İptal</button>
+                <button id="image-preview-send-btn" class="auth-btn" data-i18n="Gönder">Gönder</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- VIDEO ÖNİZLEME MODALI -->
+    <div id="video-preview-modal" class="modal">
+        <div class="modal-content" style="max-width: 600px;">
+            <h3 data-i18n="Video Önizleme">Video Önizleme</h3>
+            <div id="video-preview-container" style="margin: 20px 0; text-align: center;">
+                <video id="video-preview-video" controls style="max-width: 100%; max-height: 400px; border-radius: 8px; background: black;"></video>
+            </div>
+            <textarea id="video-caption-input" class="auth-input" placeholder="Video için açıklama ekleyin (isteğe bağlı)" data-i18n-placeholder="Video için açıklama ekleyin (isteğe bağlı)" rows="3" style="margin-top: 10px; resize: vertical;"></textarea>
+            <div class="modal-buttons" style="margin-top: 20px;">
+                <button id="video-preview-cancel-btn" class="auth-btn secondary" data-i18n="İptal">İptal</button>
+                <button id="video-preview-send-btn" class="auth-btn" data-i18n="Gönder">Gönder</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- DOSYA ÖNİZLEME MODALI -->
+    <div id="file-preview-modal" class="modal">
+        <div class="modal-content" style="max-width: 450px;">
+            <h3 data-i18n="Dosya Önizleme">Dosya Önizleme</h3>
+            <div class="file-message" style="cursor: default; margin: 20px 0;">
+                <div class="file-icon" id="file-preview-icon">📎</div>
+                <div class="file-info">
+                    <div class="file-name" id="file-preview-name">-</div>
+                    <div class="file-size" id="file-preview-size">-</div>
+                </div>
+            </div>
+            <textarea id="file-caption-input" class="auth-input" placeholder="Dosya için açıklama ekleyin (isteğe bağlı)" data-i18n-placeholder="Dosya için açıklama ekleyin (isteğe bağlı)" rows="3" style="margin-top: 10px; resize: vertical;"></textarea>
+            <div class="modal-buttons" style="margin-top: 20px;">
+                <button id="file-preview-cancel-btn" class="auth-btn secondary" data-i18n="İptal">İptal</button>
+                <button id="file-preview-send-btn" class="auth-btn" data-i18n="Gönder">Gönder</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ODA YÖNETİMİ MODALI - SADECE ODA KURUCUSU İÇİN -->
+    <div id="room-manage-modal" class="modal">
+        <div class="modal-content">
+            <div class="profile-settings">
+                <h3 data-i18n="Odayı Yönet">Odayı Yönet</h3>
+
+                <div class="profile-header">
+                    <div class="profile-avatar-large" id="room-manage-avatar">
+                        <div class="change-photo-text" data-i18n="Logo Değiştir">Logo Değiştir</div>
+                    </div>
+                    <div class="profile-info">
+                        <h4 id="room-manage-current-name">Oda</h4>
+                        <p style="opacity: 0.7; font-size: 13px;" data-i18n="Oda logosu tüm üyelere görünür">Oda logosu tüm üyelere görünür</p>
+                        <input type="file" id="room-manage-logo-input" accept="image/*" style="display: none;">
+                        <div class="photo-upload-btn" id="room-manage-upload-logo-btn">
+                            <i class="fas fa-camera"></i> <span data-i18n="Logo Yükle">Logo Yükle</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h5 data-i18n="Oda Bilgileri">Oda Bilgileri</h5>
+
+                    <div class="setting-item">
+                        <label class="setting-label" for="room-manage-name-input" data-i18n="Oda Adı">Oda Adı</label>
+                        <input type="text" id="room-manage-name-input" class="auth-input" placeholder="Oda adı" data-i18n-placeholder="Oda adı" autocomplete="off">
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h5 data-i18n="Oda Kullanıcılarını Yönet">Oda Kullanıcılarını Yönet</h5>
+                    <div class="online-users-list" id="room-manage-users-list" style="max-height: 240px;">
+                        <!-- JS ile doldurulacak -->
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h5 style="color: var(--error-color);" data-i18n="Tehlikeli Bölge">Tehlikeli Bölge</h5>
+
+                    <div class="setting-item">
+                        <p style="opacity: 0.7; font-size: 13px; margin-bottom: 10px;">
+                            <span data-i18n="Odayı silmek tüm mesajları ve oda verilerini kalıcı olarak kaldırır. Bu işlem geri alınamaz.">Odayı silmek tüm mesajları ve oda verilerini kalıcı olarak kaldırır. Bu işlem geri alınamaz.</span>
+                        </p>
+                        <button id="room-manage-delete-btn" class="auth-btn" style="width: 100%; background-color: var(--error-color);">
+                            <i class="fas fa-trash"></i> <span data-i18n="Odayı Sil">Odayı Sil</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="modal-buttons">
+                    <button id="cancel-room-manage-btn" class="auth-btn secondary" data-i18n="İptal">İptal</button>
+                    <button id="save-room-manage-btn" class="auth-btn" data-i18n="Kaydet">Kaydet</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- BİLDİRİMLER DROPDOWN -->
+    <div class="notifications-dropdown" id="notifications-dropdown">
+        <div class="notifications-dropdown-header">
+            <span data-i18n="Bildirimler">Bildirimler</span>
+            <button id="clear-all-notifications-btn" title="Tümünü Temizle" data-i18n-title="Tümünü Temizle" data-i18n="Tümünü Temizle">Tümünü Temizle</button>
+        </div>
+        <div class="notifications-list" id="notifications-list">
+            <div class="notifications-empty" id="notifications-empty" data-i18n="Henüz bildirim yok">Henüz bildirim yok</div>
+        </div>
+    </div>
+
+    <!-- MENU DROPDOWN -->
+    <div class="menu-dropdown" id="menu-dropdown">
+        <div class="menu-item" id="user-info-btn">
+            <i class="fas fa-user"></i>
+            <span data-i18n="Kişi Bilgileri">Kişi Bilgileri</span>
+        </div>
+        <div class="menu-item" id="room-info-btn">
+            <i class="fas fa-info-circle"></i>
+            <span data-i18n="Oda Bilgileri">Oda Bilgileri</span>
+        </div>
+        <div class="menu-item" id="room-manage-btn" style="display: none;">
+            <i class="fas fa-cog"></i>
+            <span data-i18n="Odayı Yönet">Odayı Yönet</span>
+        </div>
+        <div class="menu-item" id="invite-friend-btn">
+            <i class="fas fa-user-plus"></i>
+            <span data-i18n="Arkadaş Davet Et">Arkadaş Davet Et</span>
+        </div>
+        <div class="menu-item" id="clear-chat-btn">
+            <i class="fas fa-trash"></i>
+            <span data-i18n="Sohbeti Temizle">Sohbeti Temizle</span>
+        </div>
+        <div class="menu-item" id="export-chat-btn">
+            <i class="fas fa-download"></i>
+            <span data-i18n="Sohbeti Dışa Aktar">Sohbeti Dışa Aktar</span>
+        </div>
+        <div class="menu-item" id="mute-notifications-btn">
+            <i class="fas fa-bell-slash"></i>
+            <span data-i18n="Bildirimleri Sustur">Bildirimleri Sustur</span>
+        </div>
+        <div class="menu-item menu-item-danger" id="leave-room-btn" style="display: none;">
+            <i class="fas fa-right-from-bracket"></i>
+            <span data-i18n="Odadan Ayrıl">Odadan Ayrıl</span>
+        </div>
+    </div>
+
+    <!-- TOAST -->
+    <div id="toast" class="toast">
+        <h4 id="toast-title">Başlık</h4>
+        <p id="toast-message">Mesaj</p>
+    </div>
+
+    <!-- CUSTOM CONFIRM MODAL -->
+    <div id="confirm-modal" class="modal confirm-modal">
+        <div class="modal-content">
+            <div class="confirm-icon" id="confirm-icon">
+                <i class="fas fa-question-circle"></i>
+            </div>
+            <div class="confirm-title" id="confirm-title" data-i18n="Onay Gerekli">Onay Gerekli</div>
+            <div class="confirm-message" id="confirm-message" data-i18n="Bu işlemi gerçekleştirmek istediğinize emin misiniz?">Bu işlemi gerçekleştirmek istediğinize emin misiniz?</div>
+            <div class="confirm-buttons" id="confirm-buttons">
+                <button class="confirm-btn secondary" id="confirm-cancel" data-i18n="Hayır">Hayır</button>
+                <button class="confirm-btn primary" id="confirm-ok" data-i18n="Evet">Evet</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- CUSTOM ALERT MODAL -->
+    <div id="alert-modal" class="modal confirm-modal">
+        <div class="modal-content">
+            <div class="confirm-icon" id="alert-icon">
+                <i class="fas fa-info-circle"></i>
+            </div>
+            <div class="confirm-title" id="alert-title" data-i18n="Bilgilendirme">Bilgilendirme</div>
+            <div class="confirm-message" id="alert-message" data-i18n="Bu bir bilgilendirme mesajıdır.">Bu bir bilgilendirme mesajıdır.</div>
+            <div class="confirm-buttons">
+                <button class="confirm-btn primary" id="alert-ok" data-i18n="Tamam">Tamam</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GELEN ARAMA BİLDİRİMİ -->
+    <div id="incoming-call-banner" class="incoming-call-banner hidden">
+        <div class="incoming-call-avatar" id="incoming-call-avatar">?</div>
+        <div class="incoming-call-info">
+            <div class="incoming-call-name" id="incoming-call-name" data-i18n="Bilinmeyen">Bilinmeyen</div>
+            <div class="incoming-call-sub" id="incoming-call-sub" data-i18n="Sesli arıyor...">Sesli arıyor...</div>
+        </div>
+        <div class="incoming-call-actions">
+            <button class="call-action-btn decline" id="incoming-call-decline" title="Reddet" data-i18n-title="Reddet">
+                <i class="fas fa-phone-slash"></i>
+            </button>
+            <button class="call-action-btn accept" id="incoming-call-accept" title="Kabul Et" data-i18n-title="Kabul Et">
+                <i class="fas fa-phone"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- AKTİF ÇAĞRI MODALI -->
+    <div id="call-modal" class="modal call-modal">
+        <div class="modal-content call-modal-content">
+            <div class="call-modal-title" id="call-modal-title" data-i18n="Sohbet Odası">Sohbet Odası</div>
+            <div class="call-modal-status" id="call-modal-status" data-i18n="Çalıyor...">Çalıyor...</div>
+
+            <div class="call-participants-grid" id="call-participants-grid">
+                <!-- katılımcı kartları buraya eklenecek -->
+            </div>
+
+            <div class="call-controls">
+                <button class="call-control-btn" id="call-mute-btn" title="Sessize Al" data-i18n-title="Sessize Al">
+                    <i class="fas fa-microphone"></i>
+                </button>
+                <button class="call-control-btn end" id="call-end-btn" title="Görüşmeyi Sonlandır" data-i18n-title="Görüşmeyi Sonlandır">
+                    <i class="fas fa-phone-slash"></i>
+                </button>
+                <button class="call-control-btn" id="call-speaker-btn" title="Hoparlör" data-i18n-title="Hoparlör">
+                    <i class="fas fa-volume-up"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- UZAK SES ÇIKIŞLARI (görünmez) -->
+    <div id="call-remote-audios" style="display:none;"></div>
+
+    <!-- MEDYA ÖNİZLEME (WhatsApp tarzı tam ekran resim/video görüntüleyici) -->
+    <div id="media-lightbox" class="media-lightbox hidden">
+        <div class="media-lightbox-topbar">
+            <button id="media-lightbox-close-btn" class="media-lightbox-btn" title="Kapat" data-i18n-title="Kapat">
+                <i class="fas fa-arrow-left"></i>
+            </button>
+            <div id="media-lightbox-filename" class="media-lightbox-filename"></div>
+            <button id="media-lightbox-download-btn" class="media-lightbox-btn" title="İndir" data-i18n-title="İndir">
+                <i class="fas fa-download"></i>
+            </button>
+        </div>
+        <div class="media-lightbox-body">
+            <img id="media-lightbox-img" class="media-lightbox-media hidden" src="" alt="">
+            <video id="media-lightbox-video" class="media-lightbox-media hidden" controls playsinline></video>
+        </div>
+        <div id="media-lightbox-caption" class="media-lightbox-caption"></div>
+    </div>
+
+    <script src="i18n.js"></script>
+    <script src="script.js"></script>
+</body>
+
+</html>
