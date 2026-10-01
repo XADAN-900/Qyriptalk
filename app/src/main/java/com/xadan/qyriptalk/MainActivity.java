@@ -9,6 +9,9 @@ import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Environment;
@@ -46,6 +49,10 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> filePathCallback;
     private PermissionRequest pendingPermissionRequest;
 
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback netCallback;
+    private boolean offlinePageShown = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -63,12 +70,83 @@ public class MainActivity extends Activity {
         new Thread(() -> {
             try {
                 port = server.start(PREFERRED_PORT);
-                runOnUiThread(() -> webView.loadUrl("http://localhost:" + port + "/index.html"));
+                runOnUiThread(() -> loadStart());
             } catch (IOException e) {
                 runOnUiThread(() -> Toast.makeText(this,
                         "Yerel sunucu başlatılamadı: " + e.getMessage(), Toast.LENGTH_LONG).show());
             }
         }, "qyriptalk-server-start").start();
+
+        registerNetworkWatcher();
+    }
+
+    // ---------- İnternet kontrolü ----------
+
+    private boolean isOnline() {
+        if (connectivityManager == null) {
+            connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        }
+        Network n = connectivityManager.getActiveNetwork();
+        if (n == null) return false;
+        NetworkCapabilities c = connectivityManager.getNetworkCapabilities(n);
+        return c != null && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
+    }
+
+    /** İnternet varsa uygulamayı, yoksa offline.html hata ekranını yükler. */
+    private void loadStart() {
+        if (port < 0) return;
+        String base = "http://localhost:" + port + "/";
+        if (isOnline()) {
+            offlinePageShown = false;
+            webView.loadUrl(base + "index.html");
+        } else {
+            offlinePageShown = true;
+            webView.loadUrl(base + "offline.html");
+        }
+    }
+
+    private void registerNetworkWatcher() {
+        connectivityManager = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        netCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                runOnUiThread(() -> {
+                    if (port < 0) return;
+                    if (offlinePageShown) {
+                        loadStart(); // internet geldi, uygulamayı yükle
+                    } else {
+                        setOfflineBanner(false);
+                    }
+                });
+            }
+
+            @Override
+            public void onLost(Network network) {
+                runOnUiThread(() -> {
+                    if (port < 0 || offlinePageShown) return;
+                    if (!isOnline()) setOfflineBanner(true);
+                });
+            }
+        };
+        try {
+            connectivityManager.registerDefaultNetworkCallback(netCallback);
+        } catch (Exception ignored) {
+        }
+    }
+
+    /** Kullanım sırasında internet giderse üstte kırmızı uyarı şeridi gösterir. */
+    private void setOfflineBanner(boolean show) {
+        String js = "(function(){var id='qt-offline-banner';var e=document.getElementById(id);"
+                + (show
+                ? "if(!e){e=document.createElement('div');e.id=id;"
+                + "e.textContent='\u0130nternet ba\u011flant\u0131s\u0131 yok';"
+                + "e.style.cssText='position:fixed;top:0;left:0;right:0;z-index:2147483647;"
+                + "background:#d32f2f;color:#fff;text-align:center;font:600 14px sans-serif;"
+                + "padding:8px;padding-top:max(8px,env(safe-area-inset-top))';"
+                + "document.body.appendChild(e);}"
+                : "if(e)e.remove();")
+                + "})();";
+        webView.evaluateJavascript(js, null);
     }
 
     private void setupWebView() {
@@ -241,6 +319,11 @@ public class MainActivity extends Activity {
 
     public class DownloadBridge {
         @JavascriptInterface
+        public void retry() {
+            runOnUiThread(() -> loadStart());
+        }
+
+        @JavascriptInterface
         public void saveFile(String dataUrl, String fileName, String mime) {
             try {
                 int comma = dataUrl.indexOf(',');
@@ -284,6 +367,12 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (connectivityManager != null && netCallback != null) {
+            try {
+                connectivityManager.unregisterNetworkCallback(netCallback);
+            } catch (Exception ignored) {
+            }
+        }
         if (server != null) server.stop();
         if (webView != null) {
             webView.removeJavascriptInterface("QyripAndroid");
