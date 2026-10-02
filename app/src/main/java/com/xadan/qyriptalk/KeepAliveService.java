@@ -11,15 +11,25 @@ import android.os.Build;
 import android.os.IBinder;
 
 /**
- * Uygulama arka plana alındığında süreci canlı tutar; böylece Firebase bağlantısı
- * sürer ve mesaj / arama bildirimleri gelmeye devam eder.
+ * Süreci canlı tutar ve ChatWatcher ile Firebase'i yerel olarak dinler; böylece uygulama
+ * arka plandayken ya da son uygulamalardan kapatılmışken de mesaj/arama bildirimleri gelir.
  */
 public class KeepAliveService extends Service {
 
     private static final String EXTRA_IN_CALL = "in_call";
+    private static volatile boolean inCallState = false;
 
+    /** Servisi (değişiklik yapmadan) çalışır halde tutar. */
+    static void ensureRunning(Context c) {
+        launch(c, new Intent(c, KeepAliveService.class));
+    }
+
+    /** Görüşme durumunu değiştirir (mikrofon tipli servis). */
     static void start(Context c, boolean inCall) {
-        Intent i = new Intent(c, KeepAliveService.class).putExtra(EXTRA_IN_CALL, inCall);
+        launch(c, new Intent(c, KeepAliveService.class).putExtra(EXTRA_IN_CALL, inCall));
+    }
+
+    private static void launch(Context c, Intent i) {
         try {
             if (Build.VERSION.SDK_INT >= 26) {
                 c.startForegroundService(i);
@@ -39,7 +49,10 @@ public class KeepAliveService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        boolean inCall = intent != null && intent.getBooleanExtra(EXTRA_IN_CALL, false);
+        if (intent != null && intent.hasExtra(EXTRA_IN_CALL)) {
+            inCallState = intent.getBooleanExtra(EXTRA_IN_CALL, false);
+        }
+        boolean inCall = inCallState;
         Notification n = NotificationHelper.serviceNotification(this, inCall);
         try {
             if (Build.VERSION.SDK_INT >= 29) {
@@ -62,9 +75,19 @@ public class KeepAliveService extends Service {
                 }
             } catch (Exception e2) {
                 stopSelf();
+                return START_NOT_STICKY;
             }
         }
-        return START_NOT_STICKY;
+
+        NotificationHelper.createChannels(this);
+        ChatWatcher.get(this).refresh();
+        return START_STICKY;
+    }
+
+    @Override
+    public void onDestroy() {
+        ChatWatcher.get(this).shutdown();
+        super.onDestroy();
     }
 
     @Override

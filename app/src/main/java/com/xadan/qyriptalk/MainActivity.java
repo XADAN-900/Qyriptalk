@@ -16,6 +16,11 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.os.PowerManager;
+import android.provider.Settings;
 import android.provider.MediaStore;
 import android.util.Base64;
 import android.webkit.CookieManager;
@@ -28,6 +33,9 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.view.ViewGroup;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -66,6 +74,10 @@ public class MainActivity extends Activity {
     private boolean offlinePageShown = false;
 
     private String bridgeScript;
+    private boolean webReady = false;
+    private ImageView splashView;
+    private long createdAt;
+    private long pendingAcceptUntil = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -88,7 +100,21 @@ public class MainActivity extends Activity {
 
         current = this;
         webView.setBackgroundColor(Color.parseColor("#05001E"));
-        setContentView(webView);
+
+        // Açılış ekranı: sayfa yüklenene kadar logo gösterilir
+        createdAt = SystemClock.uptimeMillis();
+        FrameLayout root = new FrameLayout(this);
+        root.setBackgroundColor(Color.parseColor("#05001E"));
+        root.addView(webView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        splashView = new ImageView(this);
+        splashView.setImageResource(R.drawable.splash_logo);
+        splashView.setScaleType(ImageView.ScaleType.CENTER);
+        splashView.setBackgroundColor(Color.parseColor("#05001E"));
+        root.addView(splashView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        setContentView(root);
+        new Handler(Looper.getMainLooper()).postDelayed(this::hideSplash, 8000); // güvenlik
 
         boolean debuggable = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         WebView.setWebContentsDebuggingEnabled(debuggable);
@@ -97,7 +123,7 @@ public class MainActivity extends Activity {
 
         NotificationHelper.createChannels(this);
         requestStartupPermissions();
-        KeepAliveService.start(this, false);
+        KeepAliveService.ensureRunning(this);
 
         server = new LocalServer(getAssets());
         new Thread(() -> {
@@ -203,6 +229,18 @@ public class MainActivity extends Activity {
         runJs(js);
     }
 
+    /** Açılış logosunu (en az 0.7 sn gösterip) yumuşakça kaldırır. */
+    private void hideSplash() {
+        final ImageView sv = splashView;
+        if (sv == null) return;
+        splashView = null;
+        long wait = Math.max(0, 700 - (SystemClock.uptimeMillis() - createdAt));
+        sv.postDelayed(() -> sv.animate().alpha(0f).setDuration(250).withEndAction(() -> {
+            ViewGroup parent = (ViewGroup) sv.getParent();
+            if (parent != null) parent.removeView(sv);
+        }).start(), wait);
+    }
+
     void runJs(final String js) {
         runOnUiThread(() -> {
             if (webView != null) webView.evaluateJavascript(js, null);
@@ -251,7 +289,9 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                hideSplash();
                 if (url != null && url.contains("localhost") && url.contains("index.html")) {
+                    webReady = true;
                     injectBridge(view);
                 }
             }
@@ -357,7 +397,12 @@ public class MainActivity extends Activity {
 
         if (NotificationHelper.ACTION_ACCEPT.equals(action)) {
             NotificationHelper.cancelCall(this);
-            runJs("if(typeof acceptIncomingCall==='function'){acceptIncomingCall();}");
+            if (webReady) {
+                runJs("if(typeof acceptIncomingCall==='function'){acceptIncomingCall();}");
+            } else {
+                // Uygulama kapalıydı: web açılıp davet gelince otomatik cevaplanacak
+                pendingAcceptUntil = System.currentTimeMillis() + 30000;
+            }
         }
     }
 
@@ -440,11 +485,38 @@ public class MainActivity extends Activity {
             runOnUiThread(() -> loadStart());
         }
 
-        /** Mesaj bildirimi (sadece uygulama ekranda değilken). */
+        /** Mesaj bildirimlerini artık yerel dinleyici (ChatWatcher) üretiyor; burası boş. */
         @JavascriptInterface
         public void showNotification(String title, String body, String tag) {
-            if (visible) return;
-            NotificationHelper.showMessage(getApplicationContext(), title, body, tag);
+        }
+
+        /** Web'deki giriş bilgisi: yerel dinleyici bu kullanıcı için çalışır. */
+        @JavascriptInterface
+        public void setSession(String uid, String username, boolean enabled) {
+            if (uid == null || uid.isEmpty()) return;
+            Session old = Session.load(getApplicationContext());
+            Session.save(getApplicationContext(), uid, username == null ? "" : username, enabled);
+            KeepAliveService.ensureRunning(getApplicationContext());
+            ChatWatcher.get(getApplicationContext()).refresh();
+            if (!old.valid()) askBatteryOptimization();
+        }
+
+        @JavascriptInterface
+        public void clearSession() {
+            Session old = Session.load(getApplicationContext());
+            if (!old.valid()) return;
+            ChatWatcher.get(getApplicationContext()).removeToken(old.uid);
+            Session.clear(getApplicationContext());
+            ChatWatcher.get(getApplicationContext()).refresh();
+            if (current == null) KeepAliveService.stop(getApplicationContext());
+        }
+
+        /** Bildirimden "Cevapla"ya basılıp uygulama sıfırdan açıldıysa true döner. */
+        @JavascriptInterface
+        public boolean consumePendingAccept() {
+            boolean ok = System.currentTimeMillis() < pendingAcceptUntil;
+            pendingAcceptUntil = 0;
+            return ok;
         }
 
         /** Gelen arama bildirimi (sadece uygulama ekranda değilken). */
@@ -501,6 +573,21 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** Giriş yapılınca bir kez: pil optimizasyonundan muaf tutmayı iste (bildirimler kesilmesin). */
+    private void askBatteryOptimization() {
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            try {
+                if (!visible || Build.VERSION.SDK_INT < 23) return;
+                PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+                if (pm == null || pm.isIgnoringBatteryOptimizations(getPackageName())) return;
+                Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+                i.setData(Uri.parse("package:" + getPackageName()));
+                startActivity(i);
+            } catch (Exception ignored) {
+            }
+        }, 4000);
+    }
+
     private void toast(final String msg) {
         runOnUiThread(() -> Toast.makeText(MainActivity.this, msg, Toast.LENGTH_LONG).show());
     }
@@ -549,9 +636,9 @@ public class MainActivity extends Activity {
             }
         }
         if (server != null) server.stop();
-        KeepAliveService.stop(this);
-        NotificationHelper.cancelCall(this);
-        NotificationHelper.clearMessages(this);
+        // Servis çalışmaya devam eder (uygulama kapalıyken de bildirim gelsin);
+        // sadece giriş yoksa durdurulur.
+        if (!Session.load(this).valid()) KeepAliveService.stop(this);
         if (webView != null) {
             webView.removeJavascriptInterface("QyripAndroid");
             webView.destroy();

@@ -1,13 +1,16 @@
-# Qyriptalk Android (WebView + localhost)
+# Qyriptalk Android (WebView + localhost) + FCM push
 
-HTML uygulaması `app/src/main/assets/www/` içinde. Uygulama açılınca cihazda
-`http://localhost:38213` üzerinde minik bir sunucu başlatır ve WebView oradan yükler.
+HTML uygulaması `app/src/main/assets/www/` içinde; cihazda `http://localhost:38213` üzerinden yüklenir.
 
-- İnternet yoksa "İnternet bağlantısı yok" ekranı / kırmızı şerit gösterilir.
-- Mesaj ve gelen arama bildirimleri (zil sesi, Cevapla/Reddet) `android-bridge.js` + `KeepAliveService` ile çalışır.
-- Bildirimler uygulama arka plandayken (son uygulamalarda duruyorken) gelir. Uygulama tamamen kapatılırsa
-  (son uygulamalardan silinirse) gelmez; bunun için sunucu tarafında FCM gerekir.
+## Bildirimler
+- **FCM (asıl sistem):** `functions/` (Cloud Functions) yeni mesaj / arama olunca telefona push atar → uygulama kapalıyken de gelir.
+- **Yedek:** `ChatWatcher` Firebase'i yerel dinler (Functions kurulu değilse de uygulama arka plandayken çalışır).
+- Mesaj: sohbet başına tek bildirim, Yanıtla / Okundu. Arama: zil sesi, Cevapla / Reddet.
 
-## APK alma (GitHub Actions)
-1. Bu klasörün içeriğini repoya push et (kökte `settings.gradle` olmalı).
-2. Actions → "Build APK" → Artifacts → **Qyriptalk-APK**.
+## Kurulum (bir kez)
+1. Firebase konsol → proje `qyriptalk-cdf56` → Android uygulaması ekle: paket adı `com.xadan.qyriptalk`
+   → `google-services.json` indir → `app/google-services.json` olarak repoya koy.
+2. Firebase projesini **Blaze** (kullandıkça öde, ücretsiz kotalı) planına al (Functions için şart).
+3. GitHub repo → Settings → Secrets → `FIREBASE_TOKEN` (`firebase login:ci` çıktısı) 
+   veya `FIREBASE_SERVICE_ACCOUNT` (konsol → Project settings → Service accounts → yeni özel anahtar JSON'u).
+4. Push et: "Build APK" APK'yı, "Deploy Functions" sunucu kısmını kurar.

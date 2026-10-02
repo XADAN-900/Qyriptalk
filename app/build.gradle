@@ -10,8 +10,8 @@ android {
         applicationId "com.xadan.qyriptalk"
         minSdk 24
         targetSdk 34
-        versionCode 2
-        versionName "1.1.0"
+        versionCode 4
+        versionName "1.3.0"
     }
 
     buildTypes {
@@ -24,4 +24,16 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+}
+
+dependencies {
+    implementation platform('com.google.firebase:firebase-bom:33.1.2')
+    implementation 'com.google.firebase:firebase-database'
+    implementation 'com.google.firebase:firebase-messaging'
+}
+
+// FCM için app/google-services.json gerekir (Firebase konsolundan indirilir).
+// Dosya yoksa uygulama yine derlenir; sadece FCM push devre dışı kalır.
+if (file('google-services.json').exists()) {
+    apply plugin: 'com.google.gms.google-services'
 }
