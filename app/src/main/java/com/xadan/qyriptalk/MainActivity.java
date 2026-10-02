@@ -29,6 +29,7 @@ import android.webkit.PermissionRequest;
 import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
+import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -47,6 +48,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -75,6 +78,23 @@ public class MainActivity extends Activity {
 
     private String bridgeScript;
     private boolean webReady = false;
+
+    // Gerçek internet kontrolü (sadece "Wi-Fi bağlı" değil, sunucuya ulaşılabiliyor mu)
+    private static final String PROBE_URL =
+            "https://qyriptalk-cdf56-default-rtdb.europe-west1.firebasedatabase.app/.json?shallow=true";
+    private final Handler monitorHandler = new Handler(Looper.getMainLooper());
+    private int failCount = 0;
+    private boolean knownOffline = false;
+    private boolean loadBroken = false;
+    private boolean checkingOffline = false;
+    private final Runnable monitor = new Runnable() {
+        @Override
+        public void run() {
+            if (!visible) return;
+            checkConnection();
+            monitorHandler.postDelayed(this, 8000);
+        }
+    };
     private ImageView splashView;
     private long createdAt;
     private long pendingAcceptUntil = 0;
@@ -172,17 +192,88 @@ public class MainActivity extends Activity {
         return c != null && c.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
     }
 
+    private interface ProbeCallback {
+        void onResult(boolean online);
+    }
+
+    /** Sunucuya gerçekten ulaşılabiliyor mu? (Wi-Fi bağlı ama internet yoksa da yakalar) */
+    private void probeInternet(final ProbeCallback cb) {
+        new Thread(() -> {
+            boolean ok = false;
+            if (isOnline()) {
+                HttpURLConnection c = null;
+                try {
+                    c = (HttpURLConnection) new URL(PROBE_URL).openConnection();
+                    c.setConnectTimeout(3500);
+                    c.setReadTimeout(3500);
+                    c.setUseCaches(false);
+                    int code = c.getResponseCode();
+                    ok = code >= 100 && code < 600; // herhangi bir HTTP cevabı = sunucuya ulaşıldı
+                } catch (Exception e) {
+                    ok = false;
+                } finally {
+                    if (c != null) c.disconnect();
+                }
+            }
+            final boolean res = ok;
+            runOnUiThread(() -> cb.onResult(res));
+        }, "qyriptalk-probe").start();
+    }
+
     /** İnternet varsa uygulamayı, yoksa offline.html hata ekranını yükler. */
     private void loadStart() {
         if (port < 0 || webView == null) return;
-        String base = "http://localhost:" + port + "/";
-        if (isOnline()) {
-            offlinePageShown = false;
-            webView.loadUrl(base + "index.html");
-        } else {
+        final String base = "http://localhost:" + port + "/";
+        probeInternet(online -> {
+            if (webView == null) return;
+            failCount = 0;
+            loadBroken = false;
+            if (online) {
+                knownOffline = false;
+                offlinePageShown = false;
+                webView.loadUrl(base + "index.html");
+            } else {
+                knownOffline = true;
+                offlinePageShown = true;
+                webView.loadUrl(base + "offline.html");
+            }
+        });
+    }
+
+    /** Periyodik kontrol: internet gidince şerit, gelince şerit kalkar / sayfa yenilenir. */
+    private void checkConnection() {
+        if (port < 0 || webView == null) return;
+        probeInternet(online -> {
+            if (webView == null) return;
+            if (online) {
+                failCount = 0;
+                if (loadBroken || offlinePageShown) {
+                    loadStart(); // sayfa eksik yüklenmişti ya da hata ekranındayız
+                } else if (knownOffline) {
+                    knownOffline = false;
+                    setOfflineBanner(false);
+                }
+            } else {
+                failCount++;
+                if (failCount >= 2 && !knownOffline) {
+                    knownOffline = true;
+                    if (!offlinePageShown) setOfflineBanner(true);
+                }
+            }
+        });
+    }
+
+    /** Script/CSS yüklenemediyse (internet yok) tam ekran hata sayfasına geç. */
+    private void showOfflineIfNeeded() {
+        if (checkingOffline || offlinePageShown || port < 0) return;
+        checkingOffline = true;
+        probeInternet(online -> {
+            checkingOffline = false;
+            if (webView == null || online || offlinePageShown) return;
+            knownOffline = true;
             offlinePageShown = true;
-            webView.loadUrl(base + "offline.html");
-        }
+            webView.loadUrl("http://localhost:" + port + "/offline.html");
+        });
     }
 
     private void registerNetworkWatcher() {
@@ -204,7 +295,11 @@ public class MainActivity extends Activity {
             public void onLost(Network network) {
                 runOnUiThread(() -> {
                     if (port < 0 || offlinePageShown) return;
-                    if (!isOnline()) setOfflineBanner(true);
+                    if (!isOnline()) {
+                        knownOffline = true;
+                        failCount = 2;
+                        setOfflineBanner(true);
+                    }
                 });
             }
         };
@@ -285,6 +380,20 @@ public class MainActivity extends Activity {
                 } catch (ActivityNotFoundException ignored) {
                 }
                 return true;
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                Uri u = request.getUrl();
+                String host = u.getHost();
+                if (host == null || host.equals("localhost") || host.equals("127.0.0.1")) return;
+                String path = u.getPath() == null ? "" : u.getPath();
+                boolean critical = path.endsWith(".js") || path.endsWith(".mjs") || path.endsWith(".css");
+                int code = error.getErrorCode();
+                if (critical && (code == ERROR_HOST_LOOKUP || code == ERROR_CONNECT || code == ERROR_TIMEOUT)) {
+                    loadBroken = true;
+                    showOfflineIfNeeded();
+                }
             }
 
             @Override
@@ -598,6 +707,8 @@ public class MainActivity extends Activity {
     protected void onStart() {
         super.onStart();
         visible = true;
+        monitorHandler.removeCallbacks(monitor);
+        monitorHandler.postDelayed(monitor, 3000);
     }
 
     @Override
@@ -609,6 +720,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onStop() {
         visible = false;
+        monitorHandler.removeCallbacks(monitor);
         if (Build.VERSION.SDK_INT >= 27) {
             setShowWhenLocked(false);
             setTurnScreenOn(false);
@@ -628,6 +740,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         visible = false;
+        monitorHandler.removeCallbacks(monitor);
         if (current == this) current = null;
         if (connectivityManager != null && netCallback != null) {
             try {

@@ -19,7 +19,7 @@
   <img src="Qyriptalk_Logo.png" alt="">
   <h1>İnternet bağlantısı yok</h1>
   <p>Qyriptalk'ı kullanmak için internete bağlanman gerekiyor. Bağlantı gelince uygulama otomatik açılacak.</p>
-  <button onclick="if(window.QyripAndroid){QyripAndroid.retry()}else{location.reload()}">Tekrar dene</button>
+  <button id="retry" onclick="var b=this;b.disabled=true;b.textContent='Kontrol ediliyor...';setTimeout(function(){b.disabled=false;b.textContent='Tekrar dene'},4000);if(window.QyripAndroid){QyripAndroid.retry()}else{location.reload()}">Tekrar dene</button>
 </div>
 </body>
 </html>
