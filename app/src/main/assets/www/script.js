@@ -21,6 +21,106 @@ const database = app.database();
 // backend'siz sürümde tamamen kaldırıldı. identifySocket() eski çağrı
 // noktalarını bozmamak için no-op olarak bırakıldı.
 // ============================================================================
+
+// ============================================================================
+// ANLIK GÜNCELLEME ALTYAPISI
+// - messagesRef.off() aynı yola bağlı TÜM dinleyicileri (kenar çubuğundaki
+//   "son mesaj" dinleyicisi dahil) söküyordu. Artık sadece kendi
+//   dinleyicilerimizi (query + callback) sökeriz.
+// ============================================================================
+let messageListenerHandles = [];
+function attachMessageListener(query, eventType, cb) {
+    query.on(eventType, cb);
+    messageListenerHandles.push({ query, eventType, cb });
+}
+function detachMessageListeners() {
+    messageListenerHandles.forEach(h => {
+        try { h.query.off(h.eventType, h.cb); } catch (e) {}
+    });
+    messageListenerHandles = [];
+}
+
+function buildMessagePreviewText(lastMsg) {
+    let t = "";
+    if (lastMsg.type === 'file') t = `📎 ${lastMsg.fileName || 'Dosya'}`;
+    else if (lastMsg.type === 'image') t = "🖼️ Resim";
+    else if (lastMsg.type === 'video') t = "🎬 Video";
+    else if (lastMsg.type === 'voice') t = "🎤 Sesli Mesaj";
+    else t = lastMsg.text || "Mesaj";
+    if (t.length > 25) t = t.substring(0, 25) + '...';
+    return t;
+}
+
+// Bağlantı takılı kalırsa (WebView arka plandan dönünce, ağ değişince)
+// Firebase'i yeniden bağla: mesajlar ve önizlemeler anında akmaya devam etsin.
+let fbConnected = true;
+database.ref('.info/connected').on('value', (snap) => { fbConnected = snap.val() === true; });
+function kickFirebaseConnection() {
+    try {
+        database.goOnline();
+        setTimeout(() => {
+            if (!fbConnected) {
+                database.goOffline();
+                setTimeout(() => database.goOnline(), 200);
+            }
+        }, 2500);
+    } catch (e) {}
+}
+window.addEventListener('online', kickFirebaseConnection);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) kickFirebaseConnection(); });
+window.addEventListener('focus', kickFirebaseConnection);
+
+// Fotoğrafı göndermeden önce küçült (5MB base64 yerine ~200KB): hem gönderme
+// hem alıcıdaki önizleme/yükleme anında olur.
+function compressImageFile(file, maxDim = 1280, quality = 0.8) {
+    return new Promise((resolve) => {
+        if (!file || !file.type || !file.type.startsWith('image/') || file.type === 'image/gif' || file.type === 'image/svg+xml') {
+            return resolve(file);
+        }
+        const url = URL.createObjectURL(file);
+        const img = new Image();
+        img.onload = () => {
+            try {
+                let { width, height } = img;
+                const scale = Math.min(1, maxDim / Math.max(width, height));
+                width = Math.round(width * scale);
+                height = Math.round(height * scale);
+                const canvas = document.createElement('canvas');
+                canvas.width = width; canvas.height = height;
+                canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+                canvas.toBlob((blob) => {
+                    URL.revokeObjectURL(url);
+                    if (!blob || blob.size >= file.size) return resolve(file);
+                    const name = (file.name || 'foto').replace(/\.[^.]+$/, '') + '.jpg';
+                    resolve(new File([blob], name, { type: 'image/jpeg' }));
+                }, 'image/jpeg', quality);
+            } catch (e) { URL.revokeObjectURL(url); resolve(file); }
+        };
+        img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+        img.src = url;
+    });
+}
+
+
+// Firebase set() sunucu onayını bekler; bağlantı takılırsa arayüz sonsuza dek
+// bekliyordu ("mesaj gitmiyor"). Yerel yazma anında görünür; sunucuya gitmesi
+// arka planda sürer. En fazla ms kadar bekleyip arayüzü serbest bırakırız,
+// geç gelen hata olursa kullanıcıya bildiririz.
+function setMessageFast(ref, payload, ms = 4000) {
+    let timedOut = false;
+    const p = ref.set(payload);
+    p.catch((err) => {
+        if (timedOut) {
+            showToast('Hata', 'Mesaj gönderilemedi, bağlantınızı kontrol edin.', 'error');
+            console.error('Geç mesaj gönderme hatası:', err);
+        }
+    });
+    return Promise.race([
+        p,
+        new Promise((resolve) => setTimeout(() => { timedOut = true; resolve(); }, ms))
+    ]);
+}
+
 function identifySocket() {
     // Socket.io kaldırıldı - kasıtlı olarak boş.
 }
@@ -2066,46 +2166,35 @@ function listenToRoomLastMessage(roomId) {
     
     messagesRef.limitToLast(1).on('value', (snapshot) => {
         const messages = snapshot.val();
-        if (messages) {
-            const lastMsgKey = Object.keys(messages)[0];
-            const lastMsg = messages[lastMsgKey];
-            
-            let lastMessageText = "";
-            if (lastMsg.type === 'file') {
-                lastMessageText = `📎 ${lastMsg.fileName || 'Dosya'}`;
-            } else if (lastMsg.type === 'image') {
-                lastMessageText = "🖼️ Resim";
-            } else if (lastMsg.type === 'video') {
-                lastMessageText = "🎬 Video";
-            } else if (lastMsg.type === 'voice') {
-                lastMessageText = "🎤 Sesli Mesaj";
-            } else {
-                lastMessageText = lastMsg.text || "Mesaj";
-            }
-            
-            if (lastMessageText.length > 25) {
-                lastMessageText = lastMessageText.substring(0, 25) + '...';
-            }
-            
-            roomLastMessages[roomId] = `${lastMsg.sender}: ${lastMessageText}`;
-            
+        const isFirstLoad = !roomNotifyInitialized.has(roomId);
+        roomNotifyInitialized.add(roomId);
+
+        if (!messages) {
+            // Son mesaj silindi / oda boş: önizlemeyi de anında güncelle
+            roomLastMessages[roomId] = (window.i18n ? window.i18n.t("Henüz mesaj yok") : "Henüz mesaj yok");
             updateRoomItemLastMessage(roomId, roomLastMessages[roomId]);
+            return;
+        }
 
-            const isFirstLoad = !roomNotifyInitialized.has(roomId);
-            roomNotifyInitialized.add(roomId);
+        const lastMsgKey = Object.keys(messages)[0];
+        const lastMsg = messages[lastMsgKey];
+        if (!lastMsg) return;
 
-            if (!isFirstLoad && currentUser && lastMsg.sender !== currentUser.username) {
-                const room = rooms[roomId];
-                addGlobalNotification({
-                    id: roomId,
-                    isDM: false,
-                    name: room ? room.name : 'Sohbet Odası',
-                    sender: lastMsg.sender,
-                    text: lastMessageText,
-                    timestamp: Date.now(),
-                    read: false
-                });
-            }
+        const lastMessageText = buildMessagePreviewText(lastMsg);
+        roomLastMessages[roomId] = `${lastMsg.sender}: ${lastMessageText}`;
+        updateRoomItemLastMessage(roomId, roomLastMessages[roomId]);
+
+        if (!isFirstLoad && currentUser && lastMsg.sender !== currentUser.username) {
+            const room = rooms[roomId];
+            addGlobalNotification({
+                id: roomId,
+                isDM: false,
+                name: room ? room.name : 'Sohbet Odası',
+                sender: lastMsg.sender,
+                text: lastMessageText,
+                timestamp: Date.now(),
+                read: false
+            });
         }
     });
 }
@@ -2273,7 +2362,7 @@ function startDM(userId, username) {
 
 // DÜZELTİLMİŞ MESAJ DİNLEME - TEKRAR SORUNU ÇÖZÜLDÜ
 function listenToDMMessages(dmId) {
-    if (messagesRef) messagesRef.off();
+    detachMessageListeners();
     
     const path = `privateMessages/${dmId}/messages`;
     messagesRef = database.ref(path);
@@ -2290,7 +2379,7 @@ function listenToDMMessages(dmId) {
     listenToPinnedMessage();
 
     // Sadece child_added ile dinle, once kullanma
-    messagesRef.limitToLast(50).on('child_added', (childSnapshot) => {
+    attachMessageListener(messagesRef.limitToLast(50), 'child_added', (childSnapshot) => {
         const key = childSnapshot.key;
         const msg = childSnapshot.val();
         
@@ -2323,7 +2412,7 @@ function listenToDMMessages(dmId) {
     });
 
     // child_changed ile mesaj düzenlemelerini canlı yansıt
-    messagesRef.on('child_changed', (childSnapshot) => {
+    attachMessageListener(messagesRef, 'child_changed', (childSnapshot) => {
         updateMessageDomAfterEdit(childSnapshot.key, childSnapshot.val());
     });
     
@@ -2342,7 +2431,7 @@ function listenToRoomMessages() {
 
     const path = `rooms/${selectedRoomId}/messages`;
     
-    if (messagesRef) messagesRef.off();
+    detachMessageListeners();
     messagesRef = database.ref(path);
     
     // Mesaj ID'lerini takip etmek için Set
@@ -2357,7 +2446,7 @@ function listenToRoomMessages() {
     listenToPinnedMessage();
 
     // Sadece child_added ile dinle
-    messagesRef.limitToLast(50).on('child_added', (childSnapshot) => {
+    attachMessageListener(messagesRef.limitToLast(50), 'child_added', (childSnapshot) => {
         const key = childSnapshot.key;
         const msg = childSnapshot.val();
         
@@ -2396,12 +2485,12 @@ function listenToRoomMessages() {
     });
 
     // child_changed ile mesaj düzenlemelerini canlı yansıt
-    messagesRef.on('child_changed', (childSnapshot) => {
+    attachMessageListener(messagesRef, 'child_changed', (childSnapshot) => {
         updateMessageDomAfterEdit(childSnapshot.key, childSnapshot.val());
     });
 
     // child_removed için dinleme
-    messagesRef.on('child_removed', (childSnapshot) => {
+    attachMessageListener(messagesRef, 'child_removed', (childSnapshot) => {
         const key = childSnapshot.key;
         const existingMsg = document.querySelector(`.message-wrapper[data-message-id='${key}']`);
         if (existingMsg) {
@@ -2481,7 +2570,7 @@ function showEmptyChat() {
     selectedRoomId = null;
     isDmChat = false;
     
-    if (messagesRef) messagesRef.off();
+    detachMessageListeners();
     if (roomUsersRef) roomUsersRef.off();
     if (typingRef) typingRef.off();
     if (pinnedMessageRef) { pinnedMessageRef.off(); pinnedMessageRef = null; }
@@ -3955,9 +4044,10 @@ function appendMessage(msgId, msg, isInitialLoadFlag = false) {
             ? `privateMessages/${selectedRoomId}/messages/${msgId}`
             : `rooms/${selectedRoomId}/messages/${msgId}`;
         
-        database.ref(path).on('value', (snapshot) => {
-            const updatedMsg = snapshot.val();
-            if (updatedMsg && updatedMsg.readBy) {
+        attachMessageListener(database.ref(path + '/readBy'), 'value', (snapshot) => {
+            const liveReadBy = snapshot.val();
+            if (liveReadBy) {
+                msg.readBy = liveReadBy;
                 updateTickStatus();
             }
         });
@@ -4102,25 +4192,7 @@ function updateRoomLastMessages(roomId) {
         if (messages) {
             const lastMsgKey = Object.keys(messages)[0];
             const lastMsg = messages[lastMsgKey];
-            
-            let lastMessageText = "";
-            if (lastMsg.type === 'file') {
-                lastMessageText = `📎 ${lastMsg.fileName || 'Dosya'}`;
-            } else if (lastMsg.type === 'image') {
-                lastMessageText = "🖼️ Resim";
-            } else if (lastMsg.type === 'video') {
-                lastMessageText = "🎬 Video";
-            } else if (lastMsg.type === 'voice') {
-                lastMessageText = "🎤 Sesli Mesaj";
-            } else {
-                lastMessageText = lastMsg.text || "Mesaj";
-            }
-            
-            if (lastMessageText.length > 25) {
-                lastMessageText = lastMessageText.substring(0, 25) + '...';
-            }
-            
-            roomLastMessages[roomId] = `${lastMsg.sender}: ${lastMessageText}`;
+            roomLastMessages[roomId] = `${lastMsg.sender}: ${buildMessagePreviewText(lastMsg)}`;
             updateRoomItemLastMessage(roomId, roomLastMessages[roomId]);
         } else {
             roomLastMessages[roomId] = "Henüz mesaj yok";
@@ -4271,7 +4343,7 @@ async function sendVoiceMessage() {
         const newMessageRef = database.ref(path).push();
         const replyPayload = buildReplyPayload();
         
-        await newMessageRef.set({
+        await setMessageFast(newMessageRef, {
             sender: currentUser.username,
             senderUid: currentUser.uid,
             type: 'voice',
@@ -4308,18 +4380,25 @@ async function showImagePreview(file) {
         return;
     }
 
-    const maxSize = 5 * 1024 * 1024;
-    if (file.size > maxSize) {
-        showToast('Uyarı', 'Görsel boyutu 5MB\'dan küçük olmalıdır.', 'error');
+    if (file.size > 25 * 1024 * 1024) {
+        showToast('Uyarı', 'Görsel boyutu 25MB\'dan küçük olmalıdır.', 'error');
         return;
     }
 
     try {
         showUploadProgress(file.name);
         updateUploadProgress(30);
+
+        // Küçült: ~200KB'lık JPEG hem hızlı gider hem anında yüklenir
+        const compressed = await compressImageFile(file);
+        if (compressed.size > 5 * 1024 * 1024) {
+            hideUploadProgress();
+            showToast('Uyarı', 'Görsel boyutu 5MB\'dan küçük olmalıdır.', 'error');
+            return;
+        }
         
-        imagePreviewData = await fileToBase64(file);
-        imagePreviewFile = file;
+        imagePreviewData = await fileToBase64(compressed);
+        imagePreviewFile = compressed;
         
         updateUploadProgress(100);
         setTimeout(() => {
@@ -4356,7 +4435,7 @@ async function sendImageWithCaption(caption = '') {
         const newMessageRef = database.ref(path).push();
         const replyPayload = buildReplyPayload();
         
-        await newMessageRef.set({
+        await setMessageFast(newMessageRef, {
             sender: currentUser.username,
             senderUid: currentUser.uid,
             type: 'image',
@@ -4447,7 +4526,7 @@ async function sendVideoWithCaption(caption = '') {
         const newMessageRef = database.ref(path).push();
         const replyPayload = buildReplyPayload();
         
-        await newMessageRef.set({
+        await setMessageFast(newMessageRef, {
             sender: currentUser.username,
             senderUid: currentUser.uid,
             type: 'video',
@@ -4538,7 +4617,7 @@ async function sendFileWithCaption(caption = '') {
         const newMessageRef = database.ref(path).push();
         const replyPayload = buildReplyPayload();
 
-        await newMessageRef.set({
+        await setMessageFast(newMessageRef, {
             sender: currentUser.username,
             senderUid: currentUser.uid,
             type: 'file',
@@ -5531,70 +5610,63 @@ function loadAllUsers() {
     });
 }
 
+// DM önizlemeleri artık önbellek tabanlı ve canlı: her DM için tek bir
+// limitToLast(1) dinleyicisi var; yeni mesaj gelince önbellek güncellenir ve
+// liste anında yeniden çizilir (eskiden sadece 'users' değişince yenileniyordu
+// ve her seferinde tüm DM'ler için .once() sorgusu çekiliyordu).
+const dmLastMessageCache = {};
+let dmListRebuildScheduled = false;
+
+function scheduleDMListRebuild() {
+    if (dmListRebuildScheduled) return;
+    dmListRebuildScheduled = true;
+    setTimeout(() => {
+        dmListRebuildScheduled = false;
+        rebuildDMListFromCache();
+    }, 0);
+}
+
+function rebuildDMListFromCache() {
+    if (!currentUser || !currentUser.uid) return;
+    const currentUserId = currentUser.uid;
+    const list = [];
+
+    Object.entries(allUsers || {}).forEach(([userId, user]) => {
+        if (userId === currentUserId || !user) return;
+        const dmId = [currentUserId, userId].sort().join('_');
+        const cached = dmLastMessageCache[dmId];
+        if (!cached) return;
+        list.push({
+            id: dmId,
+            name: user.username,
+            userId: userId,
+            ts: cached.ts || 0,
+            lastMessage: `${cached.sender === currentUser.username ? 'Siz' : cached.sender}: ${cached.text}`
+        });
+    });
+
+    // En son mesajlaşılan en üstte (WhatsApp mantığı)
+    list.sort((a, b) => b.ts - a.ts);
+    window.currentDMList = list;
+    updateRoomList();
+}
+
 function updateDMList() {
     if (!currentUser || !currentUser.uid) return;
 
     const currentUserId = currentUser.uid;
-    const otherUsers = Object.entries(allUsers).filter(([userId]) => userId !== currentUserId);
-
-    // Önce hepsini paralel sorgula, listeyi TEK SEFERDE değiştir.
-    // Eskiden liste anında boşaltılıp sonuçlar teker teker geldikçe
-    // dolduruluyordu; bu, 'users' verisi her değiştiğinde (herhangi bir
-    // kullanıcının online/offline olması gibi çok sık olan bir olay) DM
-    // listesinin anlık olarak boşalıp sonra yavaşça dolmasına, yani
-    // "kayboluyor" hissi vermesine sebep oluyordu.
-    const dmPromises = otherUsers.map(([userId, user]) => {
+    Object.entries(allUsers || {}).forEach(([userId, user]) => {
+        if (userId === currentUserId || !user) return;
         const dmId = [currentUserId, userId].sort().join('_');
-
-        // Listener'a eklenip eklenmeyeceğine ASENKRON çağrı başlamadan
-        // önce, senkron olarak karar veriliyor. Eskiden bu kontrol
-        // .once('value').then() içinde yapılıyordu; updateDMList kısa
-        // aralıklarla birden fazla kez tetiklenince (ör. 'users' verisi
-        // art arda değişince) aynı dmId için iki ayrı .once() çağrısı
-        // aynı anda bekleyip ikisi de listener'ı henüz eklenmemiş
-        // sanıp aynı bildirime iki dinleyici bağlıyordu.
+        // Listener'a eklenip eklenmeyeceği senkron karar verilir (çift bağlamayı önler)
         if (!dmNotifyListenerAttached.has(dmId)) {
             dmNotifyListenerAttached.add(dmId);
             listenToDMNotifications(dmId, user.username, userId);
         }
-
-        return database.ref(`privateMessages/${dmId}/messages`).limitToLast(1).once('value').then(snapshot => {
-            const messages = snapshot.val();
-            if (!messages) return null;
-
-            const lastMsgKey = Object.keys(messages)[0];
-            const lastMsg = messages[lastMsgKey];
-
-            let lastMessageText = "";
-            if (lastMsg.type === 'file') {
-                lastMessageText = `📎 ${lastMsg.fileName || 'Dosya'}`;
-            } else if (lastMsg.type === 'image') {
-                lastMessageText = "🖼️ Resim";
-            } else if (lastMsg.type === 'video') {
-                lastMessageText = "🎬 Video";
-            } else if (lastMsg.type === 'voice') {
-                lastMessageText = "🎤 Sesli Mesaj";
-            } else {
-                lastMessageText = lastMsg.text || "Mesaj";
-            }
-
-            if (lastMessageText.length > 25) {
-                lastMessageText = lastMessageText.substring(0, 25) + '...';
-            }
-
-            return {
-                id: dmId,
-                name: user.username,
-                userId: userId,
-                lastMessage: `${lastMsg.sender === currentUser.username ? 'Siz' : lastMsg.sender}: ${lastMessageText}`
-            };
-        });
     });
 
-    Promise.all(dmPromises).then(results => {
-        window.currentDMList = results.filter(dm => dm !== null);
-        updateRoomList();
-    });
+    // Kullanıcı adı/foto değişiklikleri de listeye yansısın
+    scheduleDMListRebuild();
 }
 
 function listenToDMNotifications(dmId, dmName, userId) {
@@ -5602,30 +5674,27 @@ function listenToDMNotifications(dmId, dmName, userId) {
 
     dmMessagesRef.limitToLast(1).on('value', (snapshot) => {
         const messages = snapshot.val();
-        if (!messages) return;
+        const isFirstLoad = !dmNotifyInitialized.has(dmId);
+        dmNotifyInitialized.add(dmId);
+
+        if (!messages) {
+            delete dmLastMessageCache[dmId];
+            scheduleDMListRebuild();
+            return;
+        }
 
         const lastMsgKey = Object.keys(messages)[0];
         const lastMsg = messages[lastMsgKey];
+        if (!lastMsg) return;
 
-        let lastMessageText = "";
-        if (lastMsg.type === 'file') {
-            lastMessageText = `📎 ${lastMsg.fileName || 'Dosya'}`;
-        } else if (lastMsg.type === 'image') {
-            lastMessageText = "🖼️ Resim";
-        } else if (lastMsg.type === 'video') {
-            lastMessageText = "🎬 Video";
-        } else if (lastMsg.type === 'voice') {
-            lastMessageText = "🎤 Sesli Mesaj";
-        } else {
-            lastMessageText = lastMsg.text || "Mesaj";
-        }
+        const lastMessageText = buildMessagePreviewText(lastMsg);
 
-        if (lastMessageText.length > 25) {
-            lastMessageText = lastMessageText.substring(0, 25) + '...';
-        }
-
-        const isFirstLoad = !dmNotifyInitialized.has(dmId);
-        dmNotifyInitialized.add(dmId);
+        dmLastMessageCache[dmId] = {
+            sender: lastMsg.sender,
+            text: lastMessageText,
+            ts: typeof lastMsg.timestamp === 'number' ? lastMsg.timestamp : Date.now()
+        };
+        scheduleDMListRebuild();
 
         if (!isFirstLoad && currentUser && lastMsg.sender !== currentUser.username) {
             addGlobalNotification({
@@ -5957,7 +6026,13 @@ document.getElementById('send-button').addEventListener('click', async () => {
     try {
         const replyPayload = buildReplyPayload();
         const newMessageRef = database.ref(path).push();
-        await newMessageRef.set({
+
+        // Anında geri bildirim: kutuyu hemen temizle, mesaj yerelde hemen görünür
+        messageInput.value = '';
+        messageInput.style.height = 'auto';
+        cancelReply();
+
+        await setMessageFast(newMessageRef, {
             sender: currentUser.username,
             senderUid: currentUser.uid,
             text: messageText,
@@ -5966,11 +6041,8 @@ document.getElementById('send-button').addEventListener('click', async () => {
             ...(replyPayload ? { replyTo: replyPayload } : {})
         });
         
-        messageInput.value = '';
-        messageInput.style.height = 'auto';
-        cancelReply();
-        
     } catch (error) {
+        messageInput.value = messageText; // başarısızsa metni geri ver
         showToast('Hata', 'Mesaj gönderilirken bir hata oluştu.', 'error');
         console.error("Mesaj Gönderme Hatası:", error);
     }
