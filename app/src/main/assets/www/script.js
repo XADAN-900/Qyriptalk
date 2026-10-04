@@ -78,9 +78,13 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) kick
 let __qtRoomsCacheTimer = null;
 function cacheRoomsForOffline() {
     if (!currentUser || !currentUser.uid || !window.QTCache) return;
-    clearTimeout(__qtRoomsCacheTimer);
+    // Throttle: zamanlayıcı bekliyorsa yenisini kurma (her olayda sıfırlanınca hiç yazılmıyordu)
+    if (__qtRoomsCacheTimer) return;
     __qtRoomsCacheTimer = setTimeout(() => {
+        __qtRoomsCacheTimer = null;
         try {
+            // Odalar henüz sunucudan gelmediyse (boş) önbelleği boşla ezme
+            if (!rooms || Object.keys(rooms).length === 0) return;
             const slim = {};
             Object.keys(rooms || {}).forEach(id => {
                 if (!joinedRooms.has(id)) return;
@@ -94,15 +98,17 @@ function cacheRoomsForOffline() {
             });
             QTCache.put('rooms', slim);
         } catch (e) { console.error('Oda önbelleği yazılamadı:', e); }
-    }, 1500);
+    }, 1000);
 }
 
 let __qtUsersCacheTimer = null;
 function cacheUsersForOffline() {
     if (!currentUser || !currentUser.uid || !window.QTCache) return;
-    clearTimeout(__qtUsersCacheTimer);
+    if (__qtUsersCacheTimer) return; // throttle (debounce sürekli sıfırlanıp hiç yazılmayabiliyordu)
     __qtUsersCacheTimer = setTimeout(() => {
+        __qtUsersCacheTimer = null;
         try {
+            if (!allUsers || Object.keys(allUsers).length === 0) return;
             const slim = {};
             Object.keys(allUsers || {}).forEach(id => {
                 const u = allUsers[id];
@@ -114,7 +120,7 @@ function cacheUsersForOffline() {
             });
             QTCache.put('users', slim);
         } catch (e) { console.error('Kullanıcı önbelleği yazılamadı:', e); }
-    }, 5000);
+    }, 2000);
 }
 
 // Uygulama açılırken (veya internet yokken) önbellekteki oda/DM listesini yükler.
@@ -126,6 +132,9 @@ async function restoreOfflineState() {
             QTCache.get('rooms'), QTCache.get('users'), QTCache.get('dmList')
         ]);
         if (cRooms && Object.keys(rooms || {}).length === 0) rooms = cRooms;
+        // Önbellekte sadece bu hesabın katıldığı odalar var: joinedRooms (localStorage) boş
+        // kaldıysa odalar listede görünmüyordu, önbellekten geri kur.
+        if (cRooms && joinedRooms.size === 0) Object.keys(cRooms).forEach(id => joinedRooms.add(id));
         if (cUsers && Object.keys(allUsers || {}).length === 0) allUsers = cUsers;
         if (cDms && (!window.currentDMList || window.currentDMList.length === 0)) window.currentDMList = cDms;
 
@@ -1444,12 +1453,127 @@ function resetNotificationCount() {
 }
 
 // ÜST MENÜ ZİL BİLDİRİMLERİ
+// - Liste cihazda saklanır (uygulama kapanınca kaybolmaz)
+// - Her sohbet için "son görülen mesaj" tutulur: düzenleme / okundu işareti / silme gibi
+//   değişiklikler yeni bildirim sayılmaz, uygulama kapalıyken gelen mesajlar ise açılışta bildirilir
+// - Çıkışta / hesap değişince dinleyiciler sökülür
+const NOTIF_STORE_PREFIX = 'qt-notifs:';
+const NOTIF_SEEN_PREFIX = 'qt-notif-seen:';
+let notifSeen = {};              // chatId -> { key, ts }
+let notifLoadedFor = null;       // hangi hesabın verisi yüklü
+const roomNotifyHandles = {};    // roomId -> { query, cb }
+const dmNotifyHandles = {};      // dmId -> { query, cb }
+
+function notifUid() {
+    return (currentUser && currentUser.uid) ? currentUser.uid : null;
+}
+
+function persistGlobalNotifications() {
+    const uid = notifUid();
+    if (!uid) return;
+    try { localStorage.setItem(NOTIF_STORE_PREFIX + uid, JSON.stringify(globalNotifications)); } catch (e) {}
+}
+
+function persistNotifSeen() {
+    const uid = notifUid();
+    if (!uid) return;
+    try { localStorage.setItem(NOTIF_SEEN_PREFIX + uid, JSON.stringify(notifSeen)); } catch (e) {}
+}
+
+function recountUnreadGlobalNotifications() {
+    unreadGlobalNotifications = globalNotifications.filter(n => n && !n.read).length;
+}
+
+// Giriş yapan hesabın kayıtlı bildirimlerini (ve son görülen mesaj bilgisini) yükler.
+function loadGlobalNotifications() {
+    const uid = notifUid();
+    if (!uid || notifLoadedFor === uid) return;
+    notifLoadedFor = uid;
+    try {
+        const saved = JSON.parse(localStorage.getItem(NOTIF_STORE_PREFIX + uid) || '[]');
+        globalNotifications = Array.isArray(saved) ? saved.filter(n => n && typeof n === 'object').slice(0, MAX_GLOBAL_NOTIFICATIONS) : [];
+    } catch (e) { globalNotifications = []; }
+    try {
+        const seen = JSON.parse(localStorage.getItem(NOTIF_SEEN_PREFIX + uid) || '{}');
+        notifSeen = (seen && typeof seen === 'object') ? seen : {};
+    } catch (e) { notifSeen = {}; }
+    recountUnreadGlobalNotifications();
+    updateGlobalNotificationBadge();
+    renderGlobalNotifications();
+}
+
+// Çıkış / hesap değişimi: eski hesabın dinleyicilerini sök, bellekteki durumu sıfırla.
+// clearStored=true ise cihazdaki bildirim kayıtları da silinir (çıkışta).
+function resetNotificationState(clearStored) {
+    const uid = notifUid();
+    [roomNotifyHandles, dmNotifyHandles].forEach(handles => {
+        Object.keys(handles).forEach(id => {
+            try { handles[id].query.off('value', handles[id].cb); } catch (e) {}
+            delete handles[id];
+        });
+    });
+    roomNotifyInitialized.clear();
+    roomNotifyListenerAttached.clear();
+    dmNotifyInitialized.clear();
+    dmNotifyListenerAttached.clear();
+    try { Object.keys(dmLastMessageCache).forEach(k => delete dmLastMessageCache[k]); } catch (e) {}
+    try { dmPrefetched.clear(); } catch (e) {}
+    roomLastMessages = {};
+    if (clearStored && uid) {
+        try {
+            localStorage.removeItem(NOTIF_STORE_PREFIX + uid);
+            localStorage.removeItem(NOTIF_SEEN_PREFIX + uid);
+        } catch (e) {}
+    }
+    globalNotifications = [];
+    unreadGlobalNotifications = 0;
+    notifSeen = {};
+    notifLoadedFor = null;
+    updateGlobalNotificationBadge();
+    renderGlobalNotifications();
+}
+
+// Bir sohbetin "son mesajı" değiştiğinde çağrılır. Gerçekten YENİ ve BAŞKASINDAN gelen
+// bir mesajsa zil listesine ekler.
+function handleBellForMessage(chatId, lastMsgKey, lastMsg, notifBase) {
+    if (!notifUid() || !lastMsg || !lastMsgKey) return;
+    loadGlobalNotifications();
+
+    const ts = typeof lastMsg.timestamp === 'number' ? lastMsg.timestamp : Date.now();
+    const prev = notifSeen[chatId];
+    const next = { key: lastMsgKey, ts: Math.max(ts, prev && prev.ts ? prev.ts : 0) };
+    const changed = !prev || prev.key !== next.key || prev.ts !== next.ts;
+    notifSeen[chatId] = next;
+    if (changed) persistNotifSeen();
+
+    if (!prev) return;                         // bu sohbeti ilk kez görüyoruz: sadece kaydet
+    if (prev.key === lastMsgKey) return;       // aynı mesaj güncellendi (okundu işareti, düzenleme, tepki)
+    if (ts <= (prev.ts || 0)) return;          // son mesaj silindi, eski mesaj "son" oldu
+    const mine = (lastMsg.senderUid && lastMsg.senderUid === currentUser.uid) ||
+                 (lastMsg.sender && lastMsg.sender === currentUser.username);
+    if (mine) return;
+
+    const viewing = !document.hidden && selectedRoomId === chatId;   // şu an o sohbeti okuyorsa rozet şişmesin
+    addGlobalNotification(Object.assign({}, notifBase, {
+        msgKey: lastMsgKey,
+        timestamp: ts,
+        read: !!viewing
+    }));
+}
+
 function addGlobalNotification(notif) {
+    loadGlobalNotifications();
+    if (notif.msgKey && globalNotifications.some(n => n && n.msgKey === notif.msgKey && n.id === notif.id)) return;
+
+    const dd = document.getElementById('notifications-dropdown');
+    if (dd && dd.classList.contains('active')) notif.read = true; // liste açıkken gelen zaten görünüyor
+
     globalNotifications.unshift(notif);
     if (globalNotifications.length > MAX_GLOBAL_NOTIFICATIONS) {
         globalNotifications = globalNotifications.slice(0, MAX_GLOBAL_NOTIFICATIONS);
     }
-    unreadGlobalNotifications++;
+    recountUnreadGlobalNotifications();
+    persistGlobalNotifications();
     updateGlobalNotificationBadge();
     renderGlobalNotifications();
 }
@@ -1479,47 +1603,76 @@ function renderGlobalNotifications() {
     }
     if (empty) empty.style.display = 'none';
 
-    globalNotifications.forEach((notif, index) => {
-        const item = document.createElement('div');
-        item.className = 'notification-item' + (notif.read ? '' : ' unread');
+    globalNotifications.forEach((notif) => {
+        // Tek bir bozuk kayıt (isimsiz kullanıcı vb.) tüm listeyi çökertmesin
+        try {
+            const name = String(notif.name || 'Sohbet');
+            const item = document.createElement('div');
+            item.className = 'notification-item' + (notif.read ? '' : ' unread');
 
-        const timeStr = new Date(notif.timestamp).toLocaleTimeString((window.i18n ? window.i18n.getLocale() : 'tr-TR'), { hour: '2-digit', minute: '2-digit' });
-        const avatarLetter = notif.name.charAt(0).toUpperCase();
+            let timeStr = '';
+            try {
+                timeStr = new Date(notif.timestamp).toLocaleTimeString((window.i18n && window.i18n.getLocale ? window.i18n.getLocale() : 'tr-TR'), { hour: '2-digit', minute: '2-digit' });
+            } catch (e) {}
 
-        item.innerHTML = `
-            <div class="notification-item-avatar">${avatarLetter}</div>
-            <div class="notification-item-body">
-                <div class="notification-item-title">
-                    <span>${notif.isDM ? 'Özel Mesaj: ' : ''}${notif.name}</span>
-                    <span class="notification-item-time">${timeStr}</span>
-                </div>
-                <div class="notification-item-text">${notif.sender}: ${notif.text}</div>
-            </div>
-        `;
+            // textContent: mesajdaki "<" gibi karakterler listeyi bozmasın
+            const avatar = document.createElement('div');
+            avatar.className = 'notification-item-avatar';
+            avatar.textContent = name.charAt(0).toUpperCase();
 
-        item.onclick = () => {
-            document.getElementById('notifications-dropdown').classList.remove('active');
-            document.querySelectorAll('.room-item').forEach(el => el.classList.remove('active'));
+            const body = document.createElement('div');
+            body.className = 'notification-item-body';
 
-            if (notif.isDM) {
-                startDM(notif.userId, notif.name);
-            } else {
-                const roomItem = document.querySelector(`.room-item[data-room-id="${notif.id}"]`);
-                if (roomItem) roomItem.classList.add('active');
-                enterRoom(notif.id);
-            }
+            const title = document.createElement('div');
+            title.className = 'notification-item-title';
+            const nameSpan = document.createElement('span');
+            nameSpan.textContent = (notif.isDM ? 'Özel Mesaj: ' : '') + name;
+            const timeSpan = document.createElement('span');
+            timeSpan.className = 'notification-item-time';
+            timeSpan.textContent = timeStr;
+            title.appendChild(nameSpan);
+            title.appendChild(timeSpan);
 
-            globalNotifications.splice(index, 1);
-            renderGlobalNotifications();
-        };
+            const text = document.createElement('div');
+            text.className = 'notification-item-text';
+            text.textContent = `${notif.sender || ''}: ${notif.text || ''}`;
 
-        list.appendChild(item);
+            body.appendChild(title);
+            body.appendChild(text);
+            item.appendChild(avatar);
+            item.appendChild(body);
+
+            item.onclick = () => {
+                document.getElementById('notifications-dropdown').classList.remove('active');
+                document.querySelectorAll('.room-item').forEach(el => el.classList.remove('active'));
+
+                if (notif.isDM) {
+                    startDM(notif.userId, notif.name);
+                } else {
+                    const roomItem = document.querySelector(`.room-item[data-room-id="${notif.id}"]`);
+                    if (roomItem) roomItem.classList.add('active');
+                    enterRoom(notif.id);
+                }
+
+                const idx = globalNotifications.indexOf(notif);
+                if (idx >= 0) globalNotifications.splice(idx, 1);
+                recountUnreadGlobalNotifications();
+                persistGlobalNotifications();
+                updateGlobalNotificationBadge();
+                renderGlobalNotifications();
+            };
+
+            list.appendChild(item);
+        } catch (e) {
+            console.error('Bildirim satırı çizilemedi:', e, notif);
+        }
     });
 }
 
 function markAllGlobalNotificationsRead() {
     unreadGlobalNotifications = 0;
     globalNotifications.forEach(n => n.read = true);
+    persistGlobalNotifications();
     updateGlobalNotificationBadge();
     renderGlobalNotifications();
 }
@@ -1527,6 +1680,7 @@ function markAllGlobalNotificationsRead() {
 function clearAllGlobalNotifications() {
     globalNotifications = [];
     unreadGlobalNotifications = 0;
+    persistGlobalNotifications();
     updateGlobalNotificationBadge();
     renderGlobalNotifications();
 }
@@ -1566,6 +1720,7 @@ async function logout() {
         database.ref(`users/${currentUser.uid}/lastSeen`).set(Date.now());
     }
     
+    resetNotificationState(true); // eski hesabın bildirim dinleyicilerini sök + kayıtlarını sil
     currentUser = null;
     selectedRoomId = null;
     joinedRooms.clear();
@@ -1877,6 +2032,9 @@ function saveUserData() {
         localStorage.setItem('currentUser', JSON.stringify(currentUser));
         localStorage.setItem('joinedRooms', JSON.stringify(Array.from(joinedRooms)));
         localStorage.setItem('userProfile', JSON.stringify(userProfile));
+        // joinedRooms değişti (giriş, odaya katılma, sunucu senkronu): oda önbelleğini de yaz.
+        // Eskiden sadece 'rooms' ağacı değişince yazılıyordu, girişten sonra hiç yazılmayabiliyordu.
+        cacheRoomsForOffline();
     }
 }
 
@@ -2263,11 +2421,11 @@ function updateRoomList() {
 }
 
 function listenToRoomLastMessage(roomId) {
-    const messagesRef = database.ref(`rooms/${roomId}/messages`);
-    
-    messagesRef.limitToLast(1).on('value', (snapshot) => {
+    const query = database.ref(`rooms/${roomId}/messages`).limitToLast(1);
+    if (roomNotifyHandles[roomId]) return; // çift bağlamayı önle
+
+    const cb = (snapshot) => {
         const messages = snapshot.val();
-        const isFirstLoad = !roomNotifyInitialized.has(roomId);
         roomNotifyInitialized.add(roomId);
 
         if (!messages) {
@@ -2285,19 +2443,20 @@ function listenToRoomLastMessage(roomId) {
         roomLastMessages[roomId] = `${lastMsg.sender}: ${lastMessageText}`;
         updateRoomItemLastMessage(roomId, roomLastMessages[roomId]);
 
-        if (!isFirstLoad && currentUser && lastMsg.sender !== currentUser.username) {
-            const room = rooms[roomId];
-            addGlobalNotification({
-                id: roomId,
-                isDM: false,
-                name: room ? room.name : 'Sohbet Odası',
-                sender: lastMsg.sender,
-                text: lastMessageText,
-                timestamp: Date.now(),
-                read: false
-            });
-        }
-    });
+        // Çıkılmış / silinmiş odalar için zil bildirimi üretme
+        if (!currentUser || !joinedRooms.has(roomId)) return;
+        const room = rooms[roomId];
+        handleBellForMessage(roomId, lastMsgKey, lastMsg, {
+            id: roomId,
+            isDM: false,
+            name: (room && room.name) ? room.name : 'Sohbet Odası',
+            sender: lastMsg.sender,
+            text: lastMessageText
+        });
+    };
+
+    roomNotifyHandles[roomId] = { query, cb };
+    query.on('value', cb);
 }
 
 function updateRoomItemLastMessage(roomId, lastMessage) {
@@ -5761,6 +5920,14 @@ function rebuildDMListFromCache() {
 
     // En son mesajlaşılan en üstte (WhatsApp mantığı)
     list.sort((a, b) => b.ts - a.ts);
+
+    // Çevrimdışıyken canlı DM verisi yok: boş listeyle önbellekten gelen DM'leri (ve
+    // diskteki kopyayı) silme.
+    const offlineLike = (window.isOfflineNow && window.isOfflineNow()) || !fbConnected;
+    if (offlineLike && list.length === 0 && window.currentDMList && window.currentDMList.length > 0) {
+        updateRoomList();
+        return;
+    }
     window.currentDMList = list;
     if (window.QTCache) QTCache.put('dmList', list);
     updateRoomList();
@@ -5784,12 +5951,28 @@ function updateDMList() {
     scheduleDMListRebuild();
 }
 
-function listenToDMNotifications(dmId, dmName, userId) {
-    const dmMessagesRef = database.ref(`privateMessages/${dmId}/messages`);
+// DM mesajları da çevrimdışı okunabilsin: sohbet hiç açılmamış olsa bile her DM'nin
+// son mesajları arka planda cihaza yazılır (oda mesajları zaten 'rooms' ağacından geliyor).
+const dmPrefetched = new Set();
+function cacheDMMessagesForOffline(dmId, lastMsgKey, lastMsg) {
+    if (!window.QTCache || !currentUser || !currentUser.uid) return;
+    try { if (lastMsgKey && lastMsg) QTCache.saveMessage('dm:' + dmId, lastMsgKey, lastMsg); } catch (e) {}
+    if (dmPrefetched.has(dmId)) return;
+    dmPrefetched.add(dmId);
+    setTimeout(() => {
+        database.ref(`privateMessages/${dmId}/messages`).limitToLast(30).once('value').then(snap => {
+            const v = snap.val();
+            if (v && window.QTCache) QTCache.replaceMessages('dm:' + dmId, v);
+        }).catch(() => { dmPrefetched.delete(dmId); });
+    }, 2000);
+}
 
-    dmMessagesRef.limitToLast(1).on('value', (snapshot) => {
+function listenToDMNotifications(dmId, dmName, userId) {
+    if (dmNotifyHandles[dmId]) return; // çift bağlamayı önle
+    const query = database.ref(`privateMessages/${dmId}/messages`).limitToLast(1);
+
+    const cb = (snapshot) => {
         const messages = snapshot.val();
-        const isFirstLoad = !dmNotifyInitialized.has(dmId);
         dmNotifyInitialized.add(dmId);
 
         if (!messages) {
@@ -5810,20 +5993,21 @@ function listenToDMNotifications(dmId, dmName, userId) {
             ts: typeof lastMsg.timestamp === 'number' ? lastMsg.timestamp : Date.now()
         };
         scheduleDMListRebuild();
+        cacheDMMessagesForOffline(dmId, lastMsgKey, lastMsg);
 
-        if (!isFirstLoad && currentUser && lastMsg.sender !== currentUser.username) {
-            addGlobalNotification({
-                id: dmId,
-                isDM: true,
-                name: dmName,
-                userId: userId,
-                sender: lastMsg.sender,
-                text: lastMessageText,
-                timestamp: Date.now(),
-                read: false
-            });
-        }
-    });
+        if (!currentUser) return;
+        handleBellForMessage(dmId, lastMsgKey, lastMsg, {
+            id: dmId,
+            isDM: true,
+            name: dmName || 'Özel Mesaj',
+            userId: userId,
+            sender: lastMsg.sender,
+            text: lastMessageText
+        });
+    };
+
+    dmNotifyHandles[dmId] = { query, cb };
+    query.on('value', cb);
 }
 
 // EVENT LISTENERS
@@ -6875,10 +7059,12 @@ window.addEventListener('load', () => {
             database.ref(`users/${currentUser.uid}/lastSeen`).onDisconnect().set(Date.now());
         }
 
+        loadGlobalNotifications();
         loadAllUsers();
         updateRoomList();
         restoreOfflineState();
         syncJoinedRoomsFromServer();
+        cacheRoomsForOffline();
         showEmptyChat();
         listenForIncomingCalls();
                 identifySocket();
@@ -6951,7 +7137,9 @@ document.getElementById('login-button').addEventListener('click', () => {
                     uid
                 };
                 joinedRooms = new Set(); // önceki hesaptan kalan oda listesini temizle
+                resetNotificationState(false); // önceki hesabın bildirim durumunu temizle
                 saveUserData();
+                loadGlobalNotifications();
                 
                 updateUserAvatar(user.profilePhoto || null);
                 

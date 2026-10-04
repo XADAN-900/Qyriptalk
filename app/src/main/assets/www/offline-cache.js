@@ -67,28 +67,65 @@
         return u ? (u + '::' + k) : null;
     }
 
-    // ---- Basit anahtar/değer (debounce'lu yazım) ----
-    const pending = {};
-    function scheduleWrite(key, getValue) {
-        if (pending[key]) clearTimeout(pending[key]);
-        pending[key] = setTimeout(() => {
-            delete pending[key];
-            let v;
-            try { v = getValue(); } catch (e) { return; }
-            idbSet(key, v);
-        }, FLUSH_DELAY);
+    // ---- localStorage yedeği (sadece küçük listeler: odalar / kullanıcılar / DM listesi) ----
+    // IndexedDB bir sebepten açılmazsa liste yine de çevrimdışı görünsün.
+    const LS_PREFIX = 'qtc:';
+    const LS_MAX_CHARS = 1500000;
+    function lsMirrorSet(key, value) {
+        try {
+            const json = JSON.stringify(value, (k, v) => (typeof v === 'string' && v.length > 2000 ? undefined : v));
+            if (json && json.length <= LS_MAX_CHARS) localStorage.setItem(LS_PREFIX + key, json);
+        } catch (e) { /* kota doldu vb. – sorun değil, IndexedDB asıl kaynak */ }
     }
+    function lsMirrorGet(key) {
+        try {
+            const raw = localStorage.getItem(LS_PREFIX + key);
+            return raw ? JSON.parse(raw) : undefined;
+        } catch (e) { return undefined; }
+    }
+    function lsMirrorClear() {
+        try {
+            const del = [];
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.indexOf(LS_PREFIX) === 0) del.push(k);
+            }
+            del.forEach(k => localStorage.removeItem(k));
+        } catch (e) {}
+    }
+
+    // ---- Basit anahtar/değer (debounce'lu yazım) ----
+    const pending = {};   // key -> { timer, getValue, mirror }
+    function runPending(key) {
+        const p = pending[key];
+        if (!p) return;
+        clearTimeout(p.timer);
+        delete pending[key];
+        let v;
+        try { v = p.getValue(); } catch (e) { return; }
+        idbSet(key, v);
+        if (p.mirror) lsMirrorSet(key, v);
+    }
+    function scheduleWrite(key, getValue, mirror) {
+        if (pending[key]) clearTimeout(pending[key].timer);
+        pending[key] = { getValue, mirror: !!mirror, timer: setTimeout(() => runPending(key), FLUSH_DELAY) };
+    }
+    // Uygulama arka plana gidince / kapanırken bekleyen yazımları hemen diske at
+    // (swipe ile kapatılınca 800 ms'lik gecikme yüzünden önbellek hiç yazılmıyordu).
+    function flushPending() { Object.keys(pending).forEach(runPending); }
+    document.addEventListener('visibilitychange', () => { if (document.hidden) flushPending(); });
+    window.addEventListener('pagehide', flushPending);
 
     function putValue(name, value) {
         const key = nsKey(name);
         if (!key) return;
-        scheduleWrite(key, () => value);
+        scheduleWrite(key, () => value, true);
     }
 
     function getValue(name) {
         const key = nsKey(name);
         if (!key) return Promise.resolve(undefined);
-        return idbGet(key);
+        return idbGet(key).then(v => (v !== undefined ? v : lsMirrorGet(key)));
     }
 
     // ---- Mesajlar: sohbet başına { msgKey: msg } ----
@@ -192,6 +229,8 @@
                 tx.onerror = () => resolve(false);
             } catch (e) { resolve(false); }
         })).catch(() => false).then(() => {
+            lsMirrorClear();
+            Object.keys(pending).forEach(k => { clearTimeout(pending[k].timer); delete pending[k]; });
             Object.keys(msgMem).forEach(k => delete msgMem[k]);
             Object.keys(msgLoad).forEach(k => delete msgLoad[k]);
             Object.keys(msgFinger).forEach(k => delete msgFinger[k]);
