@@ -2350,7 +2350,7 @@ input:checked + .slider:before {
 /* TOAST BİLDİRİM */
 .toast {
     position: fixed;
-    top: 20px;
+    top: calc(20px + var(--banner-h, 0px));
     right: 20px;
     z-index: 2000;
     padding: 12px 20px;
