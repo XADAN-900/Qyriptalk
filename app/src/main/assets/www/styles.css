@@ -3523,3 +3523,21 @@ body.compact-mode .message-input-container {
 .media-lightbox-caption:empty {
     display: none;
 }
+
+/* ÇEVRİMDIŞI ŞERİDİ: şerit varken uygulama şeridin altına yerleşir, üst menü kapanmaz */
+html.has-offline-banner body {
+    padding-top: var(--banner-h, 0px);
+    box-sizing: border-box;
+}
+html.has-offline-banner .screen,
+html.has-offline-banner .whatsapp-container {
+    height: calc(100vh - var(--banner-h, 0px));
+    height: calc(100dvh - var(--banner-h, 0px));
+}
+/* şerit zaten durum çubuğu boşluğunu kapsıyor, başlık tekrar eklemesin */
+html.has-offline-banner .sidebar-header {
+    padding-top: 10px;
+}
+html.has-offline-banner body.compact-mode .sidebar-header {
+    padding-top: 6px;
+}
