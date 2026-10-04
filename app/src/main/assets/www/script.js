@@ -68,6 +68,106 @@ function kickFirebaseConnection() {
 }
 window.addEventListener('online', kickFirebaseConnection);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) kickFirebaseConnection(); });
+
+// ============================================================================
+// ÇEVRİMDIŞI DESTEK
+// İnternet yokken de odalar, DM listesi ve eski mesajlar okunabilsin.
+// Veriler offline-cache.js ile IndexedDB'ye yazılır; internet gelince Firebase
+// zaten canlı veriyi getirip bunların üstüne yazar.
+// ============================================================================
+let __qtRoomsCacheTimer = null;
+function cacheRoomsForOffline() {
+    if (!currentUser || !currentUser.uid || !window.QTCache) return;
+    clearTimeout(__qtRoomsCacheTimer);
+    __qtRoomsCacheTimer = setTimeout(() => {
+        try {
+            const slim = {};
+            Object.keys(rooms || {}).forEach(id => {
+                if (!joinedRooms.has(id)) return;
+                const r = rooms[id];
+                if (!r || !r.name) return;
+                const copy = {};
+                Object.keys(r).forEach(k => { if (k !== 'messages') copy[k] = r[k]; });
+                if (copy.password) copy.password = true; // şifreyi cihazda saklama
+                slim[id] = copy;
+                if (r.messages) QTCache.replaceMessages('room:' + id, r.messages);
+            });
+            QTCache.put('rooms', slim);
+        } catch (e) { console.error('Oda önbelleği yazılamadı:', e); }
+    }, 1500);
+}
+
+let __qtUsersCacheTimer = null;
+function cacheUsersForOffline() {
+    if (!currentUser || !currentUser.uid || !window.QTCache) return;
+    clearTimeout(__qtUsersCacheTimer);
+    __qtUsersCacheTimer = setTimeout(() => {
+        try {
+            const slim = {};
+            Object.keys(allUsers || {}).forEach(id => {
+                const u = allUsers[id];
+                if (!u) return;
+                const copy = {};
+                Object.keys(u).forEach(k => { if (k !== 'password' && k !== 'joinedRooms') copy[k] = u[k]; });
+                copy.isOnline = false; // çevrimdışıyken kimseyi "çevrimiçi" gösterme
+                slim[id] = copy;
+            });
+            QTCache.put('users', slim);
+        } catch (e) { console.error('Kullanıcı önbelleği yazılamadı:', e); }
+    }, 5000);
+}
+
+// Uygulama açılırken (veya internet yokken) önbellekteki oda/DM listesini yükler.
+// Firebase canlı veriyi getirirse zaten onun üstüne yazılır.
+async function restoreOfflineState() {
+    if (!currentUser || !currentUser.uid || !window.QTCache) return;
+    try {
+        const [cRooms, cUsers, cDms] = await Promise.all([
+            QTCache.get('rooms'), QTCache.get('users'), QTCache.get('dmList')
+        ]);
+        if (cRooms && Object.keys(rooms || {}).length === 0) rooms = cRooms;
+        if (cUsers && Object.keys(allUsers || {}).length === 0) allUsers = cUsers;
+        if (cDms && (!window.currentDMList || window.currentDMList.length === 0)) window.currentDMList = cDms;
+
+        for (const id of Object.keys(rooms || {})) {
+            if (!joinedRooms.has(id) || roomLastMessages[id]) continue;
+            const map = await QTCache.getMessages('room:' + id);
+            const list = Object.values(map).filter(Boolean).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+            const last = list[list.length - 1];
+            if (last) roomLastMessages[id] = `${last.sender}: ${buildMessagePreviewText(last)}`;
+        }
+        updateRoomList();
+    } catch (e) {
+        console.error('Çevrimdışı durum yüklenemedi:', e);
+    }
+}
+
+// Sohbet açılınca: internet yoksa (ya da sunucu mesajı gelmiyorsa) önbellekten göster.
+function showCachedMessages(chatKey, chatId) {
+    const isCurrent = () => selectedRoomId === chatId;
+    const run = async () => {
+        if (!isCurrent() || !window.QTCache) return;
+        const map = await QTCache.getMessages(chatKey);
+        if (!isCurrent()) return;
+        const entries = Object.entries(map)
+            .filter(e => e[1])
+            .sort((a, b) => (a[1].timestamp || 0) - (b[1].timestamp || 0));
+        let added = false;
+        entries.forEach(([key, msg]) => {
+            if (processedMessageIds.has(key)) return;
+            processedMessageIds.add(key);
+            if (document.querySelector(`.message-wrapper[data-message-id='${key}']`)) return;
+            appendMessage(key, msg, true);
+            added = true;
+        });
+        if (added && messagesContainer) messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    };
+    if ((window.isOfflineNow && window.isOfflineNow()) || !fbConnected) {
+        run();
+    } else {
+        setTimeout(() => { if (processedMessageIds.size === 0) run(); }, 1500);
+    }
+}
 window.addEventListener('focus', kickFirebaseConnection);
 
 // Fotoğrafı göndermeden önce küçült (5MB base64 yerine ~200KB): hem gönderme
@@ -1812,6 +1912,7 @@ function loadUserData() {
 }
 
 function clearUserData() {
+    if (window.QTCache) QTCache.clearAll(); // çıkış yapınca cihazdaki mesaj önbelleği de silinsin
     localStorage.removeItem('currentUser');
     localStorage.removeItem('joinedRooms');
     localStorage.removeItem('userProfile');
@@ -2366,6 +2467,7 @@ function listenToDMMessages(dmId) {
     
     const path = `privateMessages/${dmId}/messages`;
     messagesRef = database.ref(path);
+    const chatCacheKey = 'dm:' + dmId;
     
     // Mesaj ID'lerini takip etmek için Set
     processedMessageIds.clear();
@@ -2389,6 +2491,7 @@ function listenToDMMessages(dmId) {
         }
         
         processedMessageIds.add(key);
+        if (window.QTCache) QTCache.saveMessage(chatCacheKey, key, msg);
         
         // Eğer mesaj zaten DOM'da varsa ekleme
         if (document.querySelector(`.message-wrapper[data-message-id='${key}']`)) {
@@ -2413,6 +2516,7 @@ function listenToDMMessages(dmId) {
 
     // child_changed ile mesaj düzenlemelerini canlı yansıt
     attachMessageListener(messagesRef, 'child_changed', (childSnapshot) => {
+        if (window.QTCache) QTCache.saveMessage(chatCacheKey, childSnapshot.key, childSnapshot.val());
         updateMessageDomAfterEdit(childSnapshot.key, childSnapshot.val());
     });
     
@@ -2423,6 +2527,8 @@ function listenToDMMessages(dmId) {
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
     }, 500);
+
+    showCachedMessages(chatCacheKey, dmId);
 }
 
 // DÜZELTİLMİŞ ODA MESAJ DİNLEME - TEKRAR SORUNU ÇÖZÜLDÜ
@@ -2430,6 +2536,8 @@ function listenToRoomMessages() {
     if (!selectedRoomId || isDmChat) return;
 
     const path = `rooms/${selectedRoomId}/messages`;
+    const chatCacheKey = 'room:' + selectedRoomId;
+    const chatCacheId = selectedRoomId;
     
     detachMessageListeners();
     messagesRef = database.ref(path);
@@ -2456,6 +2564,7 @@ function listenToRoomMessages() {
         }
         
         processedMessageIds.add(key);
+        if (window.QTCache) QTCache.saveMessage(chatCacheKey, key, msg);
         
         // Eğer mesaj zaten DOM'da varsa ekleme
         if (document.querySelector(`.message-wrapper[data-message-id='${key}']`)) {
@@ -2486,12 +2595,14 @@ function listenToRoomMessages() {
 
     // child_changed ile mesaj düzenlemelerini canlı yansıt
     attachMessageListener(messagesRef, 'child_changed', (childSnapshot) => {
+        if (window.QTCache) QTCache.saveMessage(chatCacheKey, childSnapshot.key, childSnapshot.val());
         updateMessageDomAfterEdit(childSnapshot.key, childSnapshot.val());
     });
 
     // child_removed için dinleme
     attachMessageListener(messagesRef, 'child_removed', (childSnapshot) => {
         const key = childSnapshot.key;
+        if (window.QTCache) QTCache.removeMessage(chatCacheKey, key);
         const existingMsg = document.querySelector(`.message-wrapper[data-message-id='${key}']`);
         if (existingMsg) {
             existingMsg.remove();
@@ -2509,6 +2620,8 @@ function listenToRoomMessages() {
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
         }
     }, 500);
+
+    showCachedMessages(chatCacheKey, chatCacheId);
 }
 
 function updateDMReadStatus(msgId, dmId) {
@@ -5572,6 +5685,7 @@ function loadAllUsers() {
     database.ref('users').on('value', (snapshot) => {
         const usersData = snapshot.val() || {};
         allUsers = usersData;
+        cacheUsersForOffline();
         
         Object.keys(allUsers).forEach(uid => {
             const user = allUsers[uid];
@@ -5648,6 +5762,7 @@ function rebuildDMListFromCache() {
     // En son mesajlaşılan en üstte (WhatsApp mantığı)
     list.sort((a, b) => b.ts - a.ts);
     window.currentDMList = list;
+    if (window.QTCache) QTCache.put('dmList', list);
     updateRoomList();
 }
 
@@ -6762,6 +6877,7 @@ window.addEventListener('load', () => {
 
         loadAllUsers();
         updateRoomList();
+        restoreOfflineState();
         syncJoinedRoomsFromServer();
         showEmptyChat();
         listenForIncomingCalls();
@@ -6793,6 +6909,7 @@ window.addEventListener('load', () => {
 database.ref('rooms').on('value', (snapshot) => {
     rooms = snapshot.val() || {};
     updateRoomList();
+    cacheRoomsForOffline();
 });
 
 window.addEventListener('beforeunload', () => {
@@ -6814,6 +6931,11 @@ document.getElementById('login-button').addEventListener('click', () => {
     
     if (!username || !password) {
         showToast('Uyarı', 'Lütfen kullanıcı adı ve şifre giriniz.', 'error');
+        return;
+    }
+
+    if (window.isOfflineNow && window.isOfflineNow()) {
+        showToast('Hata', 'İnternet bağlantısı yok. Giriş yapmak için internete bağlan.', 'error');
         return;
     }
 

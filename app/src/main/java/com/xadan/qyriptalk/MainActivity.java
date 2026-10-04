@@ -220,7 +220,7 @@ public class MainActivity extends Activity {
         }, "qyriptalk-probe").start();
     }
 
-    /** İnternet varsa uygulamayı, yoksa offline.html hata ekranını yükler. */
+    /** Uygulamayı yükler; internet yoksa onPageFinished kırmızı şeridi gösterir. */
     private void loadStart() {
         if (port < 0 || webView == null) return;
         final String base = "http://localhost:" + port + "/";
@@ -228,15 +228,11 @@ public class MainActivity extends Activity {
             if (webView == null) return;
             failCount = 0;
             loadBroken = false;
-            if (online) {
-                knownOffline = false;
-                offlinePageShown = false;
-                webView.loadUrl(base + "index.html");
-            } else {
-                knownOffline = true;
-                offlinePageShown = true;
-                webView.loadUrl(base + "offline.html");
-            }
+            // İnternet olsun olmasın uygulama açılır (eski mesajlar okunabilsin).
+            // İnternet yoksa sadece üstte kırmızı "İnternet bağlantısı yok" şeridi görünür.
+            knownOffline = !online;
+            offlinePageShown = false;
+            webView.loadUrl(base + "index.html");
         });
     }
 
@@ -263,16 +259,21 @@ public class MainActivity extends Activity {
         });
     }
 
-    /** Script/CSS yüklenemediyse (internet yok) tam ekran hata sayfasına geç. */
+    private boolean hasLoggedInUser() {
+        try {
+            return Session.load(getApplicationContext()).valid();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** Eskiden tam ekran hata sayfasına geçerdi; artık sadece kırmızı şerit gösterilir. */
     private void showOfflineIfNeeded() {
-        if (checkingOffline || offlinePageShown || port < 0) return;
-        checkingOffline = true;
+        if (port < 0 || webView == null) return;
         probeInternet(online -> {
-            checkingOffline = false;
-            if (webView == null || online || offlinePageShown) return;
+            if (webView == null || online) return;
             knownOffline = true;
-            offlinePageShown = true;
-            webView.loadUrl("http://localhost:" + port + "/offline.html");
+            setOfflineBanner(true);
         });
     }
 
@@ -311,7 +312,8 @@ public class MainActivity extends Activity {
 
     /** Kullanım sırasında internet giderse üstte kırmızı uyarı şeridi gösterir. */
     private void setOfflineBanner(boolean show) {
-        String js = "(function(){var id='qt-offline-banner';var e=document.getElementById(id);"
+        String js = "window.__qtOffline=" + (show ? "true" : "false") + ";"
+                + "(function(){var id='qt-offline-banner';var e=document.getElementById(id);"
                 + (show
                 ? "if(!e){e=document.createElement('div');e.id=id;"
                 + "e.textContent='\\u0130nternet ba\\u011flant\\u0131s\\u0131 yok';"
@@ -402,6 +404,7 @@ public class MainActivity extends Activity {
                 if (url != null && url.contains("localhost") && url.contains("index.html")) {
                     webReady = true;
                     injectBridge(view);
+                    if (knownOffline) setOfflineBanner(true);
                 }
             }
         });
