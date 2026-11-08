@@ -53,6 +53,8 @@ public class KeepAliveService extends Service {
             inCallState = intent.getBooleanExtra(EXTRA_IN_CALL, false);
         }
         boolean inCall = inCallState;
+        // Kanal, bildirim gösterilmeden ÖNCE oluşmalı; yoksa ilk açılışta startForeground hata verir
+        NotificationHelper.createChannels(this);
         Notification n = NotificationHelper.serviceNotification(this, inCall);
         try {
             if (Build.VERSION.SDK_INT >= 29) {
@@ -79,7 +81,6 @@ public class KeepAliveService extends Service {
             }
         }
 
-        NotificationHelper.createChannels(this);
         ChatWatcher.get(this).refresh();
         return START_STICKY;
     }

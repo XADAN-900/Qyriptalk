@@ -122,7 +122,10 @@ final class ChatWatcher {
         }
         enabled = s.notificationsEnabled;
         username = s.username;
-        if (started && s.uid.equals(uid)) return;
+        if (started && s.uid.equals(uid)) {
+            scanDms(); // yeni kullanıcılar / yeni DM'ler hemen dinlensin
+            return;
+        }
         doStop();
         uid = s.uid;
         try {
@@ -271,34 +274,80 @@ final class ChatWatcher {
 
     // ---------- özel mesajlar ----------
 
+    /**
+     * Özel sohbetleri bulur. DM kimliği web uygulamasındaki gibi [uid1, uid2] sıralı + "_" ile
+     * birleştirilerek üretilir; böylece privateMessages kökü okunamasa bile (veritabanı kuralları
+     * kökü kapatıyorsa) tüm kullanıcılarla olan DM'ler dinlenir. Eskiden sadece
+     * privateMessages.json?shallow=true sorgusuna güveniliyordu; bu sorgu reddedilince hiçbir
+     * DM bildirimi gelmiyordu.
+     */
     private void scanDms() {
         final String me = uid;
         if (me == null) return;
         io.execute(() -> {
-            HttpURLConnection c = null;
-            try {
-                c = (HttpURLConnection) new URL(DB_URL + "/privateMessages.json?shallow=true").openConnection();
-                c.setConnectTimeout(10000);
-                c.setReadTimeout(15000);
-                if (c.getResponseCode() != 200) return;
-                StringBuilder sb = new StringBuilder();
-                try (BufferedReader br = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"))) {
-                    String line;
-                    while ((line = br.readLine()) != null) sb.append(line);
-                }
-                JSONObject o = new JSONObject(sb.toString());
-                final List<String> ids = new ArrayList<>();
-                Iterator<String> keys = o.keys();
-                while (keys.hasNext()) ids.add(keys.next());
-                handler.post(() -> applyDms(me, ids));
-            } catch (Exception ignored) {
-            } finally {
-                if (c != null) c.disconnect();
+            final Set<String> ids = new HashSet<>();
+            for (String other : shallowKeys("users")) {
+                if (other.equals(me)) continue;
+                ids.add(me.compareTo(other) < 0 ? me + "_" + other : other + "_" + me);
             }
+            ids.addAll(shallowKeys("privateMessages"));
+            if (ids.isEmpty()) {
+                // REST engelliyse SDK ile kullanıcı listesini al
+                handler.post(() -> scanDmsViaSdk(me));
+                return;
+            }
+            final List<String> list = new ArrayList<>(ids);
+            handler.post(() -> applyDms(me, list));
         });
     }
 
+    private void scanDmsViaSdk(final String me) {
+        if (!started || !me.equals(uid) || db == null) return;
+        db.getReference("users").addListenerForSingleValueEvent(new ValueEventListener() {
+            @Override
+            public void onDataChange(DataSnapshot snap) {
+                List<String> ids = new ArrayList<>();
+                for (DataSnapshot c : snap.getChildren()) {
+                    String other = c.getKey();
+                    if (other == null || other.equals(me)) continue;
+                    ids.add(me.compareTo(other) < 0 ? me + "_" + other : other + "_" + me);
+                }
+                applyDms(me, ids);
+            }
+
+            @Override
+            public void onCancelled(DatabaseError e) { }
+        });
+    }
+
+    /** Bir düğümün alt anahtarlarını (içeriği indirmeden) döner; hata olursa boş liste. */
+    private List<String> shallowKeys(String node) {
+        List<String> out = new ArrayList<>();
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(DB_URL + "/" + node + ".json?shallow=true").openConnection();
+            c.setConnectTimeout(10000);
+            c.setReadTimeout(15000);
+            if (c.getResponseCode() != 200) return out;
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader br = new BufferedReader(new InputStreamReader(c.getInputStream(), "UTF-8"))) {
+                String line;
+                while ((line = br.readLine()) != null) sb.append(line);
+            }
+            String body = sb.toString().trim();
+            if (!body.startsWith("{")) return out;
+            JSONObject o = new JSONObject(body);
+            Iterator<String> keys = o.keys();
+            while (keys.hasNext()) out.add(keys.next());
+        } catch (Exception ignored) {
+        } finally {
+            if (c != null) c.disconnect();
+        }
+        return out;
+    }
+
     private void applyDms(String me, List<String> ids) {
+        if (ids == null) return;
         if (!started || !me.equals(uid)) return;
         boolean fresh = dmScanned;
         for (String id : ids) {
@@ -345,12 +394,16 @@ final class ChatWatcher {
                            String convId, boolean ready, boolean fresh) {
         try {
             String senderUid = s.child("senderUid").getValue(String.class);
+            String senderName = s.child("sender").getValue(String.class);
             if (uid == null || uid.equals(senderUid)) return;
+            // eski mesajlarda senderUid olmayabilir: kendi adımızla gönderilmişse bildirim yok
+            if (senderUid == null && username != null && !username.isEmpty() && username.equals(senderName)) return;
 
             Long ts = s.child("timestamp").getValue(Long.class);
             long now = System.currentTimeMillis();
             boolean isNew = ready || (fresh && ts != null && now - ts < 120_000);
             if (!isNew || !enabled || MainActivity.visible) return;
+            if (Session.isMuted(ctx, convKey)) return;
 
             String msgKey = s.getKey();
             if (msgKey == null) return;

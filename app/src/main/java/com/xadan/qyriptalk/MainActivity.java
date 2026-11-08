@@ -602,7 +602,59 @@ public class MainActivity extends Activity {
             Session.save(getApplicationContext(), uid, username == null ? "" : username, enabled);
             KeepAliveService.ensureRunning(getApplicationContext());
             ChatWatcher.get(getApplicationContext()).refresh();
-            if (!old.valid()) askBatteryOptimization();
+            if (!old.valid()) {
+                askBatteryOptimization();
+                askFullScreenCalls();
+            }
+        }
+
+        /** Bildirim tercihleri: ses, kilit ekranında içerik, mesajları sesli okuma. */
+        @JavascriptInterface
+        public void setPrefs(boolean sound, boolean preview, boolean speak) {
+            Session.savePrefs(getApplicationContext(), sound, preview, speak);
+        }
+
+        /** Ayarlar'daki "Telefon bildirim ayarları" butonu: sistemin uygulama bildirim sayfası. */
+        @JavascriptInterface
+        public void openNotificationSettings() {
+            runOnUiThread(() -> {
+                try {
+                    Intent i;
+                    if (Build.VERSION.SDK_INT >= 26) {
+                        i = new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                                .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+                    } else {
+                        i = new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                Uri.parse("package:" + getPackageName()));
+                    }
+                    startActivity(i);
+                } catch (Exception e) {
+                    toast("Ayarlar açılamadı");
+                }
+            });
+        }
+
+        /** Ayarlar'daki "Bildirimi dene": 5 sn sonra örnek bir mesaj bildirimi gelir (ekranı kilitleyip görebilirsin). */
+        @JavascriptInterface
+        public void testNotification() {
+            final android.content.Context app = getApplicationContext();
+            NotificationHelper.createChannels(app);
+            toast("5 saniye içinde örnek bildirim gelecek. İsterseniz ekranı kilitleyin.");
+            new Handler(Looper.getMainLooper()).postDelayed(() -> NotificationHelper.showConversationMessage(app,
+                    "test:qyriptalk", false, "Qyriptalk", "test/messages", "Qyriptalk",
+                    "Bildirimler çalışıyor 🎉", System.currentTimeMillis(), "test-" + System.currentTimeMillis()), 5000);
+        }
+
+        /** Bildirim izni / kanal durumu (web tarafında uyarı göstermek için). */
+        @JavascriptInterface
+        public boolean notificationsAllowed() {
+            try {
+                android.app.NotificationManager nm =
+                        (android.app.NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+                return nm == null || nm.areNotificationsEnabled();
+            } catch (Exception e) {
+                return true;
+            }
         }
 
         @JavascriptInterface
@@ -675,6 +727,25 @@ public class MainActivity extends Activity {
                 toast("Kaydedilemedi: " + e.getMessage());
             }
         }
+    }
+
+    /**
+     * Android 14+: gelen aramanın kilit ekranında tam ekran açılması için ayrı izin gerekir
+     * (varsayılan kapalı olabilir). Giriş yapılınca bir kez ayar sayfasına yönlendirir.
+     */
+    private void askFullScreenCalls() {
+        if (Build.VERSION.SDK_INT < 34) return;
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            try {
+                if (!visible || NotificationHelper.canUseFullScreen(this)) return;
+                if (Session.askedOnce(this, "fullscreen")) return;
+                toast("Aramalar kilit ekranında görünsün diye \"Tam ekran bildirimler\" iznini açın");
+                Intent i = new Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                        Uri.parse("package:" + getPackageName()));
+                startActivity(i);
+            } catch (Exception ignored) {
+            }
+        }, 12000);
     }
 
     /** Giriş yapılınca bir kez: pil optimizasyonundan muaf tutmayı iste (bildirimler kesilmesin). */
