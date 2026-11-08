@@ -13,6 +13,7 @@
 
   // 2) Giriş bilgisini Android'e ilet (uygulama kapalıyken yerel dinleyici bu kullanıcı için çalışır)
   var lastSession = '';
+  var lastPrefs = '';
   function syncSession() {
     try {
       var u = JSON.parse(localStorage.getItem('currentUser') || 'null');
@@ -23,6 +24,16 @@
         if (sig !== lastSession) {
           lastSession = sig;
           QyripAndroid.setSession(String(u.uid), String(u.username || ''), on);
+        }
+        // Bildirim tercihleri: ses, kilit ekranı önizlemesi, mesajları sesli okuma
+        var st = (p && p.settings) || {};
+        var sound = st.soundNotifications !== false;
+        var preview = st.lockscreenPreview !== false;
+        var speak = st.speakMessages === true;
+        var psig = sound + '|' + preview + '|' + speak;
+        if (psig !== lastPrefs && typeof QyripAndroid.setPrefs === 'function') {
+          lastPrefs = psig;
+          QyripAndroid.setPrefs(sound, preview, speak);
         }
       } else if (lastSession !== 'none') {
         lastSession = 'none';
