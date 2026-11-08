@@ -136,6 +136,13 @@
         "Otomatik Çeviri": "Auto Translate",
         "Mesaj Bildirimleri": "Message Notifications",
         "Ses Bildirimleri": "Sound Notifications",
+        "Kilit ekranında mesajı göster": "Show messages on lock screen",
+        "Gelen mesajları sesli oku": "Read incoming messages aloud",
+        "Telefon bildirim ayarları": "Phone notification settings",
+        "Bildirimler kapalı": "Notifications are off",
+        "Aç": "Open",
+        "Bildirimi dene": "Test notification",
+        "Dene": "Try",
         "Dil / Language": "Dil / Language",
 
         // Arkadaş davet et

@@ -303,6 +303,8 @@ let userProfile = {
         autoTranslate: false,
         messageNotifications: true,
         soundNotifications: true,
+        lockscreenPreview: true,   // kilit ekranında mesaj içeriği görünsün (Android)
+        speakMessages: false,      // gelen mesajları sesli oku (Android, uygulama dışında)
         autoTheme: false,
         compactMode: false
     }
@@ -1397,8 +1399,10 @@ function showToast(title, message, type = 'success') {
     
     toast.className = `toast ${type}`;
     toast.classList.add('show');
-    
-    setTimeout(() => {
+
+    // Önceki zamanlayıcıyı iptal et: art arda gelen bildirimler erken kapanmasın
+    clearTimeout(showToast._timer);
+    showToast._timer = setTimeout(() => {
         toast.classList.remove('show');
     }, 3000);
 }
@@ -1559,6 +1563,29 @@ function handleBellForMessage(chatId, lastMsgKey, lastMsg, notifBase) {
         timestamp: ts,
         read: !!viewing
     }));
+    notifyInAppMessage(notifBase, viewing);
+}
+
+// Uygulama açıkken BAŞKA bir sohbete mesaj gelirse: sesli uyarı + üstte kısa bildirim.
+// (Açık sohbetin mesajları için ses zaten sohbet dinleyicisinde çalıyor; uygulama kapalı/arka
+// plandayken bildirimi ve sesi Android tarafı üretiyor.)
+let lastInAppAlertAt = 0;
+function notifyInAppMessage(notifBase, viewing) {
+    try {
+        if (viewing || document.hidden || !notifBase) return;
+        const st = (userProfile && userProfile.settings) || {};
+        if (st.messageNotifications === false) return;
+        const now = Date.now();
+        if (now - lastInAppAlertAt < 1500) return;   // art arda gelen mesajlarda ses yığılmasın
+        lastInAppAlertAt = now;
+        playMessageReceivedSound();
+        if (navigator.vibrate) { try { navigator.vibrate(60); } catch (e) {} }
+        const who = notifBase.isDM ? (notifBase.name || notifBase.sender || 'Qyriptalk')
+                                   : ((notifBase.name || 'Oda') + (notifBase.sender ? ' · ' + notifBase.sender : ''));
+        let body = String(notifBase.text || '');
+        if (body.length > 90) body = body.slice(0, 90) + '…';
+        showToast(who, body, 'info');
+    } catch (e) {}
 }
 
 function addGlobalNotification(notif) {
@@ -2263,6 +2290,10 @@ function loadAppSettings() {
     document.getElementById('auto-translate').checked = userProfile.settings.autoTranslate;
     document.getElementById('message-notifications').checked = userProfile.settings.messageNotifications;
     document.getElementById('sound-notifications').checked = userProfile.settings.soundNotifications;
+    const lockPrev = document.getElementById('lockscreen-preview');
+    if (lockPrev) lockPrev.checked = userProfile.settings.lockscreenPreview !== false;
+    const speakMsg = document.getElementById('speak-messages');
+    if (speakMsg) speakMsg.checked = userProfile.settings.speakMessages === true;
     document.getElementById('auto-theme-switch').checked = userProfile.settings.autoTheme;
     document.getElementById('compact-mode').checked = userProfile.settings.compactMode;
 }
@@ -6657,6 +6688,10 @@ document.getElementById('save-app-settings-btn').addEventListener('click', () =>
     userProfile.settings.autoTranslate = document.getElementById('auto-translate').checked;
     userProfile.settings.messageNotifications = document.getElementById('message-notifications').checked;
     userProfile.settings.soundNotifications = document.getElementById('sound-notifications').checked;
+    const lockPrevEl = document.getElementById('lockscreen-preview');
+    if (lockPrevEl) userProfile.settings.lockscreenPreview = lockPrevEl.checked;
+    const speakMsgEl = document.getElementById('speak-messages');
+    if (speakMsgEl) userProfile.settings.speakMessages = speakMsgEl.checked;
     userProfile.settings.autoTheme = document.getElementById('auto-theme-switch').checked;
     userProfile.settings.compactMode = document.getElementById('compact-mode').checked;
 
@@ -7246,3 +7281,35 @@ console.log("✅ Admin/moderator/kullanıcı ayrımı eklendi");
 console.log("✅ MyMemory API ile %100 çalışan gerçek çeviri sistemi eklendi (EN->TR)");
 console.log("✅ Çevrimiçi kullanıcı bilgileri gerçek zamanlı");
 console.log("✅ Modern custom confirm/alert modalları eklendi");
+// ============================================================
+// ANDROID: bildirim ayarları (kilit ekranı önizlemesi, sesli okuma, telefon ayarları)
+// ============================================================
+(function initAndroidNotificationSettings() {
+    const isAndroid = !!(window.QyripAndroid);
+    if (!isAndroid) return;
+    document.querySelectorAll('.android-only').forEach(el => { el.style.display = ''; });
+    const btn = document.getElementById('open-phone-notif-settings');
+    if (btn) btn.addEventListener('click', () => {
+        try { window.QyripAndroid.openNotificationSettings(); } catch (e) {}
+    });
+    const testBtn = document.getElementById('test-phone-notif');
+    if (testBtn) testBtn.addEventListener('click', () => {
+        // Önce mevcut (kaydedilmemiş) tercihleri Android'e ilet ki test gerçek ayarlarla yapılsın
+        try {
+            const snd = document.getElementById('sound-notifications');
+            const lp = document.getElementById('lockscreen-preview');
+            const sp = document.getElementById('speak-messages');
+            window.QyripAndroid.setPrefs(snd ? snd.checked : true, lp ? lp.checked : true, sp ? sp.checked : false);
+            window.QyripAndroid.testNotification();
+        } catch (e) {}
+    });
+    // Telefon bildirimleri kapalıysa giriş sonrası bir kez uyar
+    setTimeout(() => {
+        try {
+            if (typeof window.QyripAndroid.notificationsAllowed === 'function' &&
+                !window.QyripAndroid.notificationsAllowed() && currentUser) {
+                showToast('Bildirimler kapalı', 'Mesaj bildirimleri için Ayarlar > Telefon bildirim ayarları’ndan izin verin.', 'error');
+            }
+        } catch (e) {}
+    }, 6000);
+})();
