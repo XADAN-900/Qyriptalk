@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -24,11 +27,47 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build debug APK
-        run: gradle assembleDebug --no-daemon
+      # Sabit imza anahtarı (isteğe bağlı): Settings > Secrets > Actions içinde
+      # QT_KEYSTORE_B64 ve QT_KEYSTORE_PASSWORD varsa release APK bu anahtarla imzalanır.
+      - name: Prepare signing key
+        env:
+          KS_B64: ${{ secrets.QT_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/qyriptalk.jks"
+            echo "QT_KEYSTORE_FILE=$RUNNER_TEMP/qyriptalk.jks" >> "$GITHUB_ENV"
+            echo "SIGNED=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build APK
+        env:
+          QT_KEYSTORE_PASSWORD: ${{ secrets.QT_KEYSTORE_PASSWORD }}
+          QT_KEY_ALIAS: ${{ secrets.QT_KEY_ALIAS }}
+          QT_KEY_PASSWORD: ${{ secrets.QT_KEY_PASSWORD }}
+        run: |
+          if [ "$SIGNED" = "1" ]; then
+            gradle assembleRelease --no-daemon
+            cp app/build/outputs/apk/release/app-release.apk Qyriptalk.apk
+          else
+            gradle assembleDebug --no-daemon
+            cp app/build/outputs/apk/debug/app-debug.apk Qyriptalk.apk
+          fi
+          VN=$(grep -oP 'versionName "\K[^"]+' app/build.gradle)
+          echo "VERSION_NAME=$VN" >> "$GITHUB_ENV"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Qyriptalk-APK
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: Qyriptalk.apk
+
+      # Her derleme GitHub Releases'a da yüklenir:
+      # https://github.com/XADAN-900/Qyriptalk/releases/latest/download/Qyriptalk.apk
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION_NAME }}-${{ github.run_number }}
+          name: Qyriptalk ${{ env.VERSION_NAME }} (derleme ${{ github.run_number }})
+          body: "Qyriptalk Android APK. Telefona indirip kurun."
+          files: Qyriptalk.apk
+          make_latest: true
