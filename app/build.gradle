@@ -10,13 +10,30 @@ android {
         applicationId "com.xadan.qyriptalk"
         minSdk 24
         targetSdk 34
-        versionCode 4
-        versionName "1.3.0"
+        versionCode 5
+        versionName "1.4.0"
+    }
+
+    // Sabit imza: GitHub Secrets'ta anahtar varsa her sürüm aynı anahtarla imzalanır, böylece
+    // yeni APK eskisinin üzerine (verileri silmeden) güncelleme olarak kurulur.
+    def ksFile = System.getenv("QT_KEYSTORE_FILE")
+    signingConfigs {
+        if (ksFile != null && file(ksFile).exists()) {
+            qyrip {
+                storeFile file(ksFile)
+                storePassword System.getenv("QT_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("QT_KEY_ALIAS") ?: "qyriptalk"
+                keyPassword System.getenv("QT_KEY_PASSWORD") ?: System.getenv("QT_KEYSTORE_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled false
+            if (ksFile != null && file(ksFile).exists()) {
+                signingConfig signingConfigs.qyrip
+            }
         }
     }
 
