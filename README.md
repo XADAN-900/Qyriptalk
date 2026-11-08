@@ -14,3 +14,16 @@ HTML uygulaması `app/src/main/assets/www/` içinde; cihazda `http://localhost:3
 3. GitHub repo → Settings → Secrets → `FIREBASE_TOKEN` (`firebase login:ci` çıktısı) 
    veya `FIREBASE_SERVICE_ACCOUNT` (konsol → Project settings → Service accounts → yeni özel anahtar JSON'u).
 4. Push et: "Build APK" APK'yı, "Deploy Functions" sunucu kısmını kurar.
+
+
+## 1.4.0 — Bildirim güncellemesi
+- **Özel mesaj (DM) bildirimleri düzeltildi:** DM'ler artık kullanıcı listesinden bulunuyor; `privateMessages` kökü okunamasa bile bildirim gelir.
+- **Sesli bildirim:** Mesajlar için Qyriptalk'a özel bildirim sesi + titreşim (Ayarlar > Ses Bildirimleri kapalıysa sessiz kanal).
+- **Uygulama içi uyarı:** Uygulama açıkken başka bir sohbete mesaj gelirse ses + üstte kısa bildirim.
+- **Kilit ekranı:** mesaj içeriğini göster/gizle ayarı, gönderen avatarı, Yanıtla / Okundu / Sessize al (8 sa) butonları,
+  Android 12+ sistem arama görünümü (tam ekran Cevapla/Reddet), görüşme sırasında süre sayacı ve "Aramayı bitir" butonu,
+  Android 14'te tam ekran arama izni için yönlendirme.
+- **Gelen mesajları sesli oku** (isteğe bağlı, telefon sessizdeyken okumaz).
+- **Bildirimi dene** butonu ve telefon bildirim ayarlarına kısayol.
+- APK her derlemede Releases'a yüklenir: `releases/latest/download/Qyriptalk.apk`.
+- İsteğe bağlı sabit imza: `QT_KEYSTORE_B64`, `QT_KEYSTORE_PASSWORD` secret'ları eklenirse güncellemeler eskisinin üzerine kurulur.
